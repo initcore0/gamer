@@ -3,6 +3,7 @@ from __future__ import annotations
 from gamer.bot.handlers import (
     format_movers_reply,
     format_scored_reply,
+    help_text,
     parse_feedback_action,
 )
 from gamer.db.models import FeedbackVerdict
@@ -56,3 +57,22 @@ def test_format_scored_reply_shows_top_reasons_and_penalty() -> None:
     assert "old release" not in reply
     # Applied penalty is flagged.
     assert "on cooldown" in reply
+
+
+def test_help_text_lists_commands_and_is_valid_html() -> None:
+    text = help_text()
+    for cmd in ("/recommend", "/why", "/mute", "/prefs", "/digest", "/help"):
+        assert cmd in text
+    # HTML parse_mode: angle brackets in placeholders must be escaped.
+    assert "&lt;game&gt;" in text
+    assert "<game>" not in text
+    # Balanced bold tags.
+    assert text.count("<b>") == text.count("</b>")
+
+
+def test_help_and_start_handlers_registered() -> None:
+    from gamer.bot.handlers import router
+
+    # /help and /start (CommandStart) both route to cmd_help — the router has a
+    # message handler registered for them.
+    assert any(h.callback.__name__ == "cmd_help" for h in router.message.handlers)

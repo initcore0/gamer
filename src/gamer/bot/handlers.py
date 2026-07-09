@@ -1,6 +1,7 @@
 """aiogram v3 command surface (PLAN.md §4.7).
 
 Commands (DM, interactive):
+  /help, /start — brief intro to the bot (works in DM and groups)
   /recommend    — top movers right now (M2: naive; M3 swaps in the scorer)
   /why <game>   — explain a recommendation's score breakdown
   /mute <game>  — stop recommending a game
@@ -15,7 +16,7 @@ this stays unit-testable without a live Telegram connection.
 from __future__ import annotations
 
 from aiogram import F, Router
-from aiogram.filters import Command, CommandObject
+from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
@@ -31,6 +32,29 @@ log = get_logger("bot")
 router = Router(name="gamer")
 
 _PREF_KEY = "default"
+
+
+def help_text() -> str:
+    """Brief intro shown by /help and /start. Pure so it's unit-testable."""
+    return (
+        "🎮 <b>gamer</b> — I watch the Steam charts and suggest what to stream next.\n"
+        "\n"
+        "<b>Commands</b>\n"
+        "• /recommend — top picks right now, with a one-line reason each\n"
+        "• /why &lt;game&gt; — the score breakdown behind a pick\n"
+        "• /mute &lt;game&gt; — stop suggesting a game\n"
+        "• /prefs — show your genres, mutes, and digest setting\n"
+        "• /digest on|off — toggle the daily group digest\n"
+        "• /help — this message\n"
+        "\n"
+        "Tap the 👍 / 👎 / ▶️ buttons under a pick to teach me your taste."
+    )
+
+
+@router.message(CommandStart())
+@router.message(Command("help"))
+async def cmd_help(message: Message) -> None:
+    await message.answer(help_text(), parse_mode="HTML")
 
 
 async def _get_prefs() -> StreamerPref:
