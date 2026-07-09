@@ -9,6 +9,7 @@ Event → table mapping:
   GAME          → games (upsert on (platform, platform_app_id))
   PLAYER_COUNT  → signals_samples (metric=players, upsert on (game,metric,ts))
   REVIEW        → signals_samples (metric=review_count)
+  TWITCH        → signals_samples (metric=twitch_viewers); skipped if unmappable
   NEWS          → news_items (upsert on (source, external_id))
 Events for an unknown appid create a stub Game row so samples/news always link.
 """
@@ -80,11 +81,11 @@ class DbEventSink:
             for event in events:
                 if event.kind is EventKind.GAME:
                     written += await self._persist_game(session, event, resolve_game, game_ids)
-                elif event.kind in (EventKind.PLAYER_COUNT, EventKind.REVIEW):
+                elif event.kind in (EventKind.PLAYER_COUNT, EventKind.REVIEW, EventKind.TWITCH):
                     written += await self._persist_sample(session, event, resolve_game)
                 elif event.kind is EventKind.NEWS:
                     written += await self._persist_news(session, event, resolve_game)
-                # PRICE / RELEASE / TWITCH: folded into GAME/signals later (M4).
+                # PRICE / RELEASE: folded into GAME/signals later.
         return written
 
     async def _persist_game(
@@ -134,6 +135,9 @@ class DbEventSink:
         if event.kind is EventKind.PLAYER_COUNT:
             metric = SignalMetric.PLAYERS
             value = event.payload.get("players")
+        elif event.kind is EventKind.TWITCH:
+            metric = SignalMetric.TWITCH_VIEWERS
+            value = event.payload.get("viewers")
         else:  # REVIEW
             metric = SignalMetric.REVIEW_COUNT
             value = event.payload.get("review_count")
