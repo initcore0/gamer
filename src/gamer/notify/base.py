@@ -16,6 +16,7 @@ from typing import Any, Protocol, runtime_checkable
 class Channel(enum.StrEnum):
     TELEGRAM_DM = "telegram_dm"  # streamer's private chat (interactive)
     TELEGRAM_GROUP = "telegram_group"  # broadcast digest (read-only)
+    DISCORD = "discord"  # webhook broadcast (read-only) — proves the abstraction (M5)
 
 
 @dataclass(slots=True)
