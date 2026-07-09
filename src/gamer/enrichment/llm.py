@@ -1,8 +1,12 @@
-"""Optional Ollama LLM summaries for the digest (PLAN.md §4.4, M4).
+"""Optional local-LLM summaries for the digest (PLAN.md §4.4, M4).
 
-The digest is perfectly usable without an LLM. When enabled, a local Ollama model
-(e.g. Llama 3.1 8B) turns the day's top picks into a short, human-sounding blurb
-that is prepended to the notification — "digest reads like a human wrote it".
+The digest is perfectly usable without an LLM. When enabled, a local model turns
+the day's top picks into a short, human-sounding blurb that is prepended to the
+notification — "digest reads like a human wrote it".
+
+Two backends are supported via ``settings.llm.api``: Ollama's native
+``/api/generate`` (default) and any OpenAI-compatible ``/chat/completions`` server
+(llama.cpp, vLLM, LM Studio, …).
 
 Everything here is **feature-flagged and fail-open**: :meth:`LLMSummarizer.summarize_digest`
 returns ``None`` when ``settings.llm.enabled`` is False *or* on any error (network,
@@ -65,13 +69,15 @@ class LLMSummarizer:
             return None
         prompt = build_summary_prompt(items)
         try:
-            return await self._generate(prompt)
+            if self._settings.api == "openai":
+                return await self._generate_openai(prompt)
+            return await self._generate_ollama(prompt)
         except Exception as exc:
             log.warning("llm_summary_failed", error=str(exc), model=self._settings.model)
             return None
 
-    async def _generate(self, prompt: str) -> str | None:
-        """POST the prompt to Ollama's ``/api/generate`` and return the reply text."""
+    async def _generate_ollama(self, prompt: str) -> str | None:
+        """POST to Ollama's ``/api/generate`` and return the reply text."""
         url = f"{self._settings.ollama_url.rstrip('/')}/api/generate"
         payload = {
             "model": self._settings.model,
@@ -83,10 +89,40 @@ class LLMSummarizer:
             resp.raise_for_status()
             data: Any = resp.json()
         text = data.get("response") if isinstance(data, dict) else None
+        return self._clean(text, keys=data)
+
+    async def _generate_openai(self, prompt: str) -> str | None:
+        """POST to an OpenAI-compatible ``/chat/completions`` (llama.cpp, vLLM…)."""
+        url = f"{self._settings.openai_base_url.rstrip('/')}/chat/completions"
+        headers: dict[str, str] = {}
+        key = self._settings.openai_api_key.get_secret_value()
+        if key:
+            headers["Authorization"] = f"Bearer {key}"
+        payload = {
+            "model": self._settings.model,
+            "messages": [{"role": "user", "content": prompt}],
+            "stream": False,
+            "temperature": 0.7,
+        }
+        async with PoliteClient(rate=4, per=1.0, timeout=60.0) as client:
+            resp = await client.request("POST", url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data: Any = resp.json()
+        text: Any = None
+        if isinstance(data, dict):
+            choices = data.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict):
+                    text = message.get("content")
+        return self._clean(text, keys=data)
+
+    def _clean(self, text: Any, *, keys: Any) -> str | None:
+        """Strip and validate the model's reply; ``None`` if empty/malformed."""
         if not isinstance(text, str):
             log.warning(
                 "llm_summary_no_response",
-                keys=list(data) if isinstance(data, dict) else None,
+                keys=list(keys) if isinstance(keys, dict) else None,
             )
             return None
         blurb = text.strip()

@@ -61,8 +61,15 @@ class EmbeddingsSettings(BaseSettings):
 
 class LLMSettings(BaseSettings):
     enabled: bool = False
+    # Which backend the endpoint speaks: Ollama's native /api/generate, or an
+    # OpenAI-compatible /chat/completions (llama.cpp, vLLM, LM Studio, …).
+    api: Literal["ollama", "openai"] = "ollama"
     ollama_url: str = "http://localhost:11434"
     model: str = "llama3.1:8b"
+    # OpenAI-compatible base URL (must include the /v1). Only used when api="openai".
+    openai_base_url: str = "http://localhost:8080/v1"
+    # Optional bearer key for the OpenAI-compatible server (llama.cpp usually none).
+    openai_api_key: SecretStr = SecretStr("")
 
 
 class RssSettings(BaseSettings):
