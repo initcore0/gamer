@@ -28,6 +28,8 @@ paths = [
     '''\.gitleaks\.toml''',
     '''uv\.lock''',
     '''SECURITY\.md''',
+    # Redaction tests necessarily contain fake key=... fixtures.
+    '''tests/test_logging_redact\.py''',
 ]
 # The fake values shipped in .env.example must never trip the scanner.
 regexes = [

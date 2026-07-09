@@ -8,10 +8,10 @@ from gamer.logging import redact_secrets
 def test_redacts_steam_key_in_httpx_style_error() -> None:
     msg = (
         "Client error '403 Forbidden' for url "
-        "'https://api.steampowered.com/x/v1/?appid=570&key=ABCDEF0123456789'"
+        "'https://api.steampowered.com/x/v1/?appid=570&key=FAKEFAKE0000FAKE'"
     )
     out = redact_secrets(msg)
-    assert "ABCDEF0123456789" not in out
+    assert "FAKEFAKE0000FAKE" not in out
     assert "key=***" in out
     assert "appid=570" in out  # non-secret params untouched
 
