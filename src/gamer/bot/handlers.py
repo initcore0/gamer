@@ -213,6 +213,14 @@ async def on_feedback(callback: CallbackQuery) -> None:
         return
     verdict, rec_id = parsed
     async with session_scope() as session:
+        rec_exists = (
+            await session.execute(select(Recommendation.id).where(Recommendation.id == rec_id))
+        ).scalar_one_or_none()
+        if rec_exists is None:
+            # Stale or forged callback — answer gracefully instead of hitting the
+            # feedback.rec_id foreign key.
+            await callback.answer("That recommendation is gone.")
+            return
         session.add(Feedback(rec_id=rec_id, verdict=verdict))
     log.info("feedback_recorded", rec_id=rec_id, verdict=verdict.value)
     await callback.answer({"up": "👍 Noted!", "down": "👎 Got it.", "played": "🎮 Nice!"}[verdict])

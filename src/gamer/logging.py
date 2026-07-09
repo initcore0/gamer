@@ -7,9 +7,24 @@ structlog; ``SecretStr`` already masks itself, but never log a whole ``Settings`
 from __future__ import annotations
 
 import logging
+import re
 import sys
 
 import structlog
+
+# Credential-bearing query parameters upstream URLs may carry (Steam's ``key``,
+# OAuth-style tokens…). httpx exception strings embed the full request URL, so
+# anything derived from ``str(exc)`` must pass through redact_secrets before
+# being logged or persisted.
+_SECRET_PARAM_RE = re.compile(
+    r"\b(key|api_?key|token|access_token|client_secret)=[^&\s'\"]+",
+    re.IGNORECASE,
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Mask credential query-parameter values in free text (URLs, error strings)."""
+    return _SECRET_PARAM_RE.sub(r"\1=***", text)
 
 
 def configure_logging(*, level: str = "INFO", json: bool = False) -> None:

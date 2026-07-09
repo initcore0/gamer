@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from gamer.db import session_scope
 from gamer.db.models import Job, JobStatus, SourceCursor
-from gamer.logging import get_logger
+from gamer.logging import get_logger, redact_secrets
 from gamer.sources.base import FetchContext, RawEvent, Source
 
 log = get_logger("sources.runner")
@@ -109,7 +109,9 @@ async def run_source(
         if batch:
             written += await sink.persist(batch)
     except Exception as exc:  # a broken source degrades, never crashes the app
-        error = f"{type(exc).__name__}: {exc}"
+        # httpx errors embed the full request URL (which may carry an API key);
+        # redact before this string reaches logs or the jobs table.
+        error = redact_secrets(f"{type(exc).__name__}: {exc}")
         log.error("source_run_failed", source=name, error=error)
 
     success = error is None

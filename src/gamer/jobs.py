@@ -52,6 +52,9 @@ async def run_digest_once() -> None:
     Prefers the scored recommender (M3); falls back to the naive top-movers digest
     when the scorer has nothing yet (no components/candidates).
     """
+    if not await _digest_enabled():
+        log.info("digest_skipped", reason="disabled via /digest off")
+        return
     recs = await recommend(limit=10)
     if recs:
         notification = build_scored_digest(recs, channel=Channel.TELEGRAM_GROUP)
@@ -62,8 +65,29 @@ async def run_digest_once() -> None:
         source = "movers"
     await enqueue(notification)
     transports = build_telegram_transports()
-    stats = await dispatch_pending(transports)
+    try:
+        stats = await dispatch_pending(transports)
+    finally:
+        # Both transports share one aiogram Bot; close its HTTP session so each
+        # digest run doesn't leak an aiohttp connector.
+        await next(iter(transports.values())).aclose()
     log.info("digest_dispatched", source=source, sent=stats.sent, failed=stats.failed)
+
+
+async def _digest_enabled(key: str = "default") -> bool:
+    """The streamer's ``/digest on|off`` preference (default: on)."""
+    from sqlalchemy import select
+
+    from gamer.db import session_scope
+    from gamer.db.models import StreamerPref
+
+    async with session_scope() as session:
+        enabled = (
+            await session.execute(
+                select(StreamerPref.digest_enabled).where(StreamerPref.key == key)
+            )
+        ).scalar_one_or_none()
+    return True if enabled is None else bool(enabled)
 
 
 def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
