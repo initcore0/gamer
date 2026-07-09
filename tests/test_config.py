@@ -71,3 +71,15 @@ def test_health_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
     assert Settings().health.stale_after_hours == 12
     assert Settings().health.api_port == 8080
+
+
+def test_llm_openai_backend_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GAMER_LLM__API", "openai")
+    monkeypatch.setenv("GAMER_LLM__OPENAI_BASE_URL", "http://box:8080/v1")
+    monkeypatch.setenv("GAMER_LLM__OPENAI_API_KEY", "sk-supersecret-xyz")
+    get_settings.cache_clear()
+    s = Settings()
+    assert s.llm.api == "openai"
+    assert s.llm.openai_base_url == "http://box:8080/v1"
+    assert s.llm.openai_api_key.get_secret_value() == "sk-supersecret-xyz"
+    assert "sk-supersecret-xyz" not in repr(s.llm)  # secret masked

@@ -75,3 +75,66 @@ async def test_summarize_blank_response_returns_none() -> None:
     respx.post(_GENERATE).mock(return_value=httpx.Response(200, json={"response": "   "}))
     out = await LLMSummarizer(_enabled()).summarize_digest(["Hades II"])
     assert out is None
+
+
+# ── OpenAI-compatible backend (llama.cpp / vLLM) ─────────────────────────────
+
+_OPENAI_BASE = "http://llm.test/v1"
+_CHAT = f"{_OPENAI_BASE}/chat/completions"
+
+
+def _openai_enabled(*, key: str = "") -> LLMSettings:
+    return LLMSettings(
+        enabled=True,
+        api="openai",
+        openai_base_url=_OPENAI_BASE,
+        openai_api_key=key,
+        model="Qwen3.6-27B",
+    )
+
+
+@respx.mock
+async def test_openai_backend_returns_blurb() -> None:
+    route = respx.post(_CHAT).mock(
+        return_value=httpx.Response(
+            200,
+            json={"choices": [{"message": {"role": "assistant", "content": "  Roguelike day.  "}}]},
+        )
+    )
+    out = await LLMSummarizer(_openai_enabled()).summarize_digest(["Hades II"])
+    assert out == "Roguelike day."  # stripped
+    sent = route.calls.last.request
+    assert b"Hades II" in sent.content  # prompt carried through in the messages
+    assert b"messages" in sent.content  # chat-completions shape, not /api/generate
+
+
+@respx.mock
+async def test_openai_backend_sends_bearer_when_key_set() -> None:
+    route = respx.post(_CHAT).mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+    )
+    await LLMSummarizer(_openai_enabled(key="secret-key")).summarize_digest(["X"])
+    assert route.calls.last.request.headers.get("Authorization") == "Bearer secret-key"
+
+
+@respx.mock
+async def test_openai_backend_no_auth_header_without_key() -> None:
+    route = respx.post(_CHAT).mock(
+        return_value=httpx.Response(200, json={"choices": [{"message": {"content": "hi"}}]})
+    )
+    await LLMSummarizer(_openai_enabled()).summarize_digest(["X"])
+    assert "Authorization" not in route.calls.last.request.headers
+
+
+@respx.mock
+async def test_openai_backend_malformed_response_returns_none() -> None:
+    respx.post(_CHAT).mock(return_value=httpx.Response(200, json={"choices": []}))
+    out = await LLMSummarizer(_openai_enabled()).summarize_digest(["X"])
+    assert out is None
+
+
+@respx.mock
+async def test_openai_backend_http_error_returns_none() -> None:
+    respx.post(_CHAT).mock(return_value=httpx.Response(400))
+    out = await LLMSummarizer(_openai_enabled()).summarize_digest(["X"])
+    assert out is None
