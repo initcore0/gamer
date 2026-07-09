@@ -76,6 +76,20 @@ def test_scored_digest_renders_summary_when_provided() -> None:
     assert "Rising Star" in n.text
 
 
+def test_scored_digest_escapes_llm_markup_in_summary() -> None:
+    # LLM output is untrusted: raw < or & must not reach Telegram's HTML parser,
+    # or the whole send fails with a permanent bad request.
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        summary='Big day <b>for "roguelikes" & deckbuilders</b>',
+    )
+    assert "<b>for" not in n.text
+    assert "&lt;b&gt;for &quot;roguelikes&quot; &amp; deckbuilders&lt;/b&gt;" in n.text
+    # The digest's own markup is still intact.
+    assert n.text.startswith("<b>🎮 What to stream")
+
+
 def test_scored_digest_none_summary_matches_current_output() -> None:
     # summary=None (and the default) must be byte-for-byte the pre-LLM digest.
     baseline = build_scored_digest(_one_rec(), for_day=date(2026, 7, 9))

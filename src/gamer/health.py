@@ -105,8 +105,10 @@ async def alert_stale_sources_once(
     if not stale:
         return []
 
-    if not settings.telegram.bot_token.get_secret_value():
-        log.info("health.alert_skipped", reason="no bot_token configured", stale=stale)
+    if not settings.telegram.bot_token.get_secret_value() or not settings.telegram.dm_chat_id:
+        # Without a token AND a DM chat id the alert has nowhere to go — skipping
+        # here keeps chat_id=0 rows from being enqueued and permanently failing.
+        log.info("health.alert_skipped", reason="telegram DM not configured", stale=stale)
         return stale
 
     for source in stale:

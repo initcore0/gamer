@@ -7,6 +7,7 @@ so the same digest can go to Telegram now and Discord later.
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 from gamer.notify.base import Channel, Notification
 from gamer.scoring.base import ScoredRecommendation
@@ -87,7 +88,9 @@ def build_scored_digest(
 
     header = f"<b>🎮 What to stream — {day.isoformat()}</b>"
     if summary:
-        text = f"{header}\n\n<i>{summary}</i>\n\n{body}"
+        # LLM output is untrusted markup: a stray < or & would make Telegram's
+        # HTML parse_mode reject the whole message (permanent send failure).
+        text = f"{header}\n\n<i>{escape(summary)}</i>\n\n{body}"
     else:
         text = f"{header}\n\n{body}"
     return Notification(

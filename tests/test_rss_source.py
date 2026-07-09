@@ -210,3 +210,18 @@ async def test_malformed_xml_is_skipped_without_raising() -> None:
     events = await _collect(_source([FEED_A, FEED_B]), FetchContext())
     # Malformed feed contributes nothing; the good feed still parses.
     assert [e.natural_key for e in events] == ["atom-id-1"]
+
+
+def test_oversized_guid_is_hashed_to_fit_external_id() -> None:
+    # news_items.external_id is String(256): a longer guid must be hashed, not
+    # passed through (one oversized key would abort the whole persist batch).
+    from gamer.sources.rss import _MAX_NATURAL_KEY_LEN, _entry_natural_key
+
+    long_id = "https://example.com/very-long-guid?" + "x" * 300
+    key = _entry_natural_key({"id": long_id, "link": "l", "title": "t"})
+    assert key.startswith("sha256:")
+    assert len(key) <= _MAX_NATURAL_KEY_LEN
+    # Stable: the same oversized id always maps to the same key.
+    assert key == _entry_natural_key({"id": long_id})
+    # Short ids still pass through untouched.
+    assert _entry_natural_key({"id": "guid-1"}) == "guid-1"

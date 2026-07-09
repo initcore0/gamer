@@ -73,3 +73,30 @@ def test_dedup_key_format() -> None:
     assert stale_dedup_key("steam_api", later_same_day) == "stale:steam_api:2026-07-09"
     next_day = NOW + timedelta(days=1)
     assert stale_dedup_key("steam_api", next_day) == "stale:steam_api:2026-07-10"
+
+
+async def test_alert_skipped_when_dm_chat_not_configured(
+    monkeypatch,  # type: ignore[no-untyped-def]
+) -> None:
+    """With a token but dm_chat_id=0 the alert has no destination: it must skip
+    (and not enqueue chat_id=0 rows that would permanently fail)."""
+    import pytest
+
+    from gamer import health
+    from gamer.config import Settings
+
+    monkeypatch.setenv("GAMER_TELEGRAM__BOT_TOKEN", "123:fake")
+    monkeypatch.setenv("GAMER_TELEGRAM__DM_CHAT_ID", "0")
+    settings = Settings()
+
+    async def fake_find_stale(now=None, *, settings=None):  # type: ignore[no-untyped-def]
+        return ["steam_api"]
+
+    async def must_not_enqueue(msg):  # type: ignore[no-untyped-def]
+        pytest.fail("enqueue must not be called without a DM destination")
+
+    monkeypatch.setattr(health, "find_stale_sources", fake_find_stale)
+    monkeypatch.setattr(health, "enqueue", must_not_enqueue)
+
+    stale = await health.alert_stale_sources_once(NOW, settings=settings)
+    assert stale == ["steam_api"]

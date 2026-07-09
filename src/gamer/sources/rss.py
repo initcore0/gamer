@@ -45,11 +45,22 @@ log = get_logger("sources.rss")
 _UPSTREAM_ERRORS = (httpx.HTTPError, RetryableStatus)
 
 
+# news_items.external_id is String(256); longer keys must be hashed or the whole
+# persist batch aborts on one oversized guid.
+_MAX_NATURAL_KEY_LEN = 256
+
+
 def _entry_natural_key(entry: Any) -> str:
-    """Stable per-entry id: the feed's id/guid, else a hash of link+title."""
+    """Stable per-entry id: the feed's id/guid, else a hash of link+title.
+
+    Oversized ids are hashed (stably) so they always fit ``external_id``.
+    """
     raw_id = entry.get("id") or entry.get("guid")
     if raw_id:
-        return str(raw_id)
+        key = str(raw_id)
+        if len(key) <= _MAX_NATURAL_KEY_LEN:
+            return key
+        return f"sha256:{hashlib.sha256(key.encode()).hexdigest()}"
     link = entry.get("link") or ""
     title = entry.get("title") or ""
     digest = hashlib.sha256(f"{link}\n{title}".encode()).hexdigest()
