@@ -12,6 +12,7 @@ import signal
 
 from sqlalchemy import text
 
+from gamer.api import run_api
 from gamer.bot.app import run_bot
 from gamer.config import get_settings
 from gamer.db import dispose_engine, get_engine
@@ -28,6 +29,7 @@ class App:
         self.scheduler = Scheduler()
         self._stop = asyncio.Event()
         self._bot_task: asyncio.Task[None] | None = None
+        self._api_task: asyncio.Task[None] | None = None
 
     async def _check_db(self) -> None:
         """Fail fast if the database is unreachable at boot."""
@@ -53,11 +55,26 @@ class App:
         else:
             log.info("bot_disabled", reason="no bot_token configured")
 
+        # Read-only status API (the public build log). A taken port must not
+        # crash the app, so the task guards itself and logs on failure.
+        self._api_task = asyncio.create_task(self._run_api())
+        log.info("api_enabled", port=self.settings.health.api_port)
+
         self._install_signal_handlers()
         log.info("app_ready")
         await self._stop.wait()
 
         await self.shutdown()
+
+    async def _run_api(self) -> None:
+        """Serve the status API, guarding so a bind failure (e.g. port taken)
+        logs and returns instead of taking down the whole app."""
+        try:
+            await run_api(self.settings)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("api_failed", error=f"{type(exc).__name__}: {exc}")
 
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
@@ -74,6 +91,10 @@ class App:
             self._bot_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._bot_task
+        if self._api_task is not None:
+            self._api_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._api_task
         await dispose_engine()
         log.info("app_stopped")
 

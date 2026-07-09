@@ -53,6 +53,51 @@ def test_scored_digest_empty() -> None:
     assert "still gathering" in n.text
 
 
+def _one_rec() -> list[ScoredRecommendation]:
+    return [
+        ScoredRecommendation(
+            game_id=1,
+            name="Rising Star",
+            score=0.44,
+            breakdown={"momentum": {"weighted": 0.30, "reason": "players surging"}},
+        )
+    ]
+
+
+def test_scored_digest_renders_summary_when_provided() -> None:
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        summary="Roguelikes are having a moment today.",
+    )
+    assert "<i>Roguelikes are having a moment today.</i>" in n.text
+    # Blurb sits above the picks.
+    assert n.text.index("Roguelikes") < n.text.index("Rising Star")
+    assert "Rising Star" in n.text
+
+
+def test_scored_digest_escapes_llm_markup_in_summary() -> None:
+    # LLM output is untrusted: raw < or & must not reach Telegram's HTML parser,
+    # or the whole send fails with a permanent bad request.
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        summary='Big day <b>for "roguelikes" & deckbuilders</b>',
+    )
+    assert "<b>for" not in n.text
+    assert "&lt;b&gt;for &quot;roguelikes&quot; &amp; deckbuilders&lt;/b&gt;" in n.text
+    # The digest's own markup is still intact.
+    assert n.text.startswith("<b>🎮 What to stream")
+
+
+def test_scored_digest_none_summary_matches_current_output() -> None:
+    # summary=None (and the default) must be byte-for-byte the pre-LLM digest.
+    baseline = build_scored_digest(_one_rec(), for_day=date(2026, 7, 9))
+    explicit_none = build_scored_digest(_one_rec(), for_day=date(2026, 7, 9), summary=None)
+    assert explicit_none.text == baseline.text
+    assert "<i>" not in baseline.text
+
+
 def test_mover_math() -> None:
     m = Mover(game_id=1, name="X", platform_app_id=1, latest=150, baseline=100)
     assert m.delta == 50

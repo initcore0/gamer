@@ -7,6 +7,7 @@ so the same digest can go to Telegram now and Discord later.
 from __future__ import annotations
 
 from datetime import date
+from html import escape
 
 from gamer.notify.base import Channel, Notification
 from gamer.scoring.base import ScoredRecommendation
@@ -69,9 +70,14 @@ def build_scored_digest(
     *,
     channel: Channel = Channel.TELEGRAM_GROUP,
     for_day: date | None = None,
+    summary: str | None = None,
 ) -> Notification:
     """Digest built from real recommendations (M3). One line per pick with its
     top "why" reason. Same per-day dedup key as :func:`build_digest`.
+
+    ``summary`` is the optional human-sounding blurb from the LLM (M4). When given,
+    it is rendered as an italic intro line above the picks; when ``None`` the digest
+    is byte-for-byte what it was before the LLM feature existed.
     """
     day = for_day or date.today()
     if recs:
@@ -80,7 +86,13 @@ def build_scored_digest(
     else:
         body = "No picks yet — still gathering signal data."
 
-    text = f"<b>🎮 What to stream — {day.isoformat()}</b>\n\n{body}"
+    header = f"<b>🎮 What to stream — {day.isoformat()}</b>"
+    if summary:
+        # LLM output is untrusted markup: a stray < or & would make Telegram's
+        # HTML parse_mode reject the whole message (permanent send failure).
+        text = f"{header}\n\n<i>{escape(summary)}</i>\n\n{body}"
+    else:
+        text = f"{header}\n\n{body}"
     return Notification(
         channel=channel,
         text=text,

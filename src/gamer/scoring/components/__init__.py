@@ -3,7 +3,7 @@
 Each component implements :class:`~gamer.scoring.base.ScoreComponent`, fetching
 its own features from the DB keyed off ``candidate.game_id`` and normalizing to
 ``[0, 1]``. The signal-derived trio lives in :mod:`signals`; the taste-based
-``fit`` component lives in :mod:`fit`.
+``fit`` component lives in :mod:`fit`; ``watchability`` (Twitch) in :mod:`watchability`.
 """
 
 from __future__ import annotations
@@ -14,10 +14,12 @@ from gamer.scoring.components.signals import (
     HypeComponent,
     MomentumComponent,
 )
+from gamer.scoring.components.watchability import WatchabilityComponent
 
 __all__ = [
     "FitComponent",
     "FreshnessComponent",
     "HypeComponent",
     "MomentumComponent",
+    "WatchabilityComponent",
 ]

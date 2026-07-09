@@ -67,3 +67,17 @@ def _build_steam_store() -> Source:
     from gamer.sources.steam_store import SteamStoreSource
 
     return SteamStoreSource()
+
+
+@register("twitch")
+def _build_twitch() -> Source:
+    from gamer.sources.twitch import TwitchSource
+
+    return TwitchSource()
+
+
+@register("rss")
+def _build_rss() -> Source:
+    from gamer.sources.rss import RssSource
+
+    return RssSource()

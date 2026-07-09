@@ -15,6 +15,9 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 
 from gamer.config import Settings
+from gamer.enrichment.jobs import enrich_news_once
+from gamer.enrichment.llm import LLMSummarizer
+from gamer.health import alert_stale_sources_once
 from gamer.logging import get_logger
 from gamer.notify import Channel, dispatch_pending, enqueue
 from gamer.notify.digest import build_digest, build_scored_digest
@@ -57,7 +60,10 @@ async def run_digest_once() -> None:
         return
     recs = await recommend(limit=10)
     if recs:
-        notification = build_scored_digest(recs, channel=Channel.TELEGRAM_GROUP)
+        # Optional LLM blurb (M4). Fail-open: returns None when disabled/unreachable,
+        # and the digest then renders exactly as it did before the LLM existed.
+        summary = await LLMSummarizer().summarize_digest([r.name for r in recs])
+        notification = build_scored_digest(recs, channel=Channel.TELEGRAM_GROUP, summary=summary)
         source = "scorer"
     else:
         movers = await top_movers(limit=10)
@@ -90,6 +96,11 @@ async def _digest_enabled(key: str = "default") -> bool:
     return True if enabled is None else bool(enabled)
 
 
+async def run_health_check_once() -> None:
+    """Alert the streamer about any newly-stale source (PLAN.md §6 M4)."""
+    await alert_stale_sources_once()
+
+
 def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
     """Register source-poll jobs and the daily digest with the scheduler."""
     for name, factory in REGISTRY.items():
@@ -101,3 +112,10 @@ def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
         scheduler.add_interval_job(run_digest_once, seconds=24 * 3600, name="digest")
     else:
         log.info("digest_disabled", reason="no group_chat_id configured")
+
+    # News dedup/clustering (M4). Always-on: get_embedder() falls back to the
+    # deterministic HashEmbedder when embeddings are disabled, so this needs no flag.
+    scheduler.add_interval_job(enrich_news_once, seconds=6 * 3600, name="enrich:news")
+
+    # Self-health: hourly stale-source check that pings the streamer once/day.
+    scheduler.add_interval_job(run_health_check_once, seconds=3600, name="health")

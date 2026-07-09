@@ -49,6 +49,7 @@ def _call_returns_list(factory: Any) -> list[ScoreComponent]:
 # discovery skips whatever fails to import or build.
 _SIGNALS = "gamer.scoring.components.signals"
 _FIT = "gamer.scoring.components.fit"
+_WATCH = "gamer.scoring.components.watchability"
 
 _PROVIDERS: tuple[_Provider, ...] = (
     # signals.py is expected to expose a builder returning momentum/hype/freshness.
@@ -56,7 +57,8 @@ _PROVIDERS: tuple[_Provider, ...] = (
     _Provider(module=_SIGNALS, attr="MomentumComponent", build=_instantiate_each),
     _Provider(module=_SIGNALS, attr="HypeComponent", build=_instantiate_each),
     _Provider(module=_SIGNALS, attr="FreshnessComponent", build=_instantiate_each),
-    _Provider(module=_SIGNALS, attr="WatchabilityComponent", build=_instantiate_each),
+    # watchability.py (Twitch viewers-to-players) — M4.
+    _Provider(module=_WATCH, attr="WatchabilityComponent", build=_instantiate_each),
     # fit.py is expected to expose FitComponent.
     _Provider(module=_FIT, attr="FitComponent", build=_instantiate_each),
 )
