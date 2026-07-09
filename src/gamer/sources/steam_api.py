@@ -32,7 +32,6 @@ from gamer.config import get_settings
 from gamer.db import session_scope
 from gamer.db.models import Game
 from gamer.logging import get_logger
-from gamer.sources import register
 from gamer.sources.base import EventKind, FetchContext, RawEvent
 from gamer.sources.http import PoliteClient, RetryableStatus
 
@@ -214,8 +213,3 @@ class SteamApiSource:
                 platform_app_id=int(appid),
                 fetched_at=now,
             )
-
-
-@register("steam_api")
-def _build() -> SteamApiSource:
-    return SteamApiSource()

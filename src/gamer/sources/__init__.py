@@ -48,3 +48,22 @@ def register(name: str) -> Callable[[Callable[[], Source]], Callable[[], Source]
         return factory
 
     return _wrap
+
+
+# Source factories are registered here (not via a decorator inside each adapter
+# module) so importing this package populates REGISTRY without importing every
+# adapter's heavy deps. Each factory lazily imports its module on first build.
+
+
+@register("steam_api")
+def _build_steam_api() -> Source:
+    from gamer.sources.steam_api import SteamApiSource
+
+    return SteamApiSource()
+
+
+@register("steam_store")
+def _build_steam_store() -> Source:
+    from gamer.sources.steam_store import SteamStoreSource
+
+    return SteamStoreSource()
