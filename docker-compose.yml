@@ -1,0 +1,48 @@
+# Local one-box stack (PLAN.md §2). Reads secrets from .env only — none in this
+# file. `docker compose up` boots Postgres+pgvector and the app.
+#
+# Ollama is optional (LLM summaries, feature-flagged) — enable with:
+#   docker compose --profile llm up
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${GAMER_DB__USER:-gamer}
+      POSTGRES_PASSWORD: ${GAMER_DB__PASSWORD:?set GAMER_DB__PASSWORD in .env}
+      POSTGRES_DB: ${GAMER_DB__NAME:-gamer}
+    ports:
+      # Host port is overridable (GAMER_PG_PORT) to avoid clashing with another
+      # local Postgres. Container always listens on 5432.
+      - "${GAMER_PG_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${GAMER_DB__USER:-gamer} -d ${GAMER_DB__NAME:-gamer}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      # Inside the compose network, reach Postgres by service name.
+      GAMER_DB__HOST: postgres
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    profiles: ["llm"]
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama:/root/.ollama
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  ollama:

@@ -1,0 +1,38 @@
+# Secrets — NEVER commit these (build-in-public: see SECURITY.md)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Local data / models
+data/
+models/
+*.sqlite3
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+
+# Agent worktrees / local Claude state
+.claude/

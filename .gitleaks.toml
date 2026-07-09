@@ -1,0 +1,36 @@
+# gitleaks config — build-in-public secret hygiene (PLAN.md §5).
+# Extends the default ruleset with project-specific rules for the exact
+# credentials this project uses. Any match fails the pre-commit hook and CI.
+
+title = "gamer gitleaks config"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "steam-web-api-key"
+description = "Steam Web API key (32 hex chars)"
+# Only flag when clearly a Steam key assignment, to avoid matching arbitrary hashes.
+regex = '''(?i)steam[_-]?(api[_-]?)?key['"\s:=]{1,6}([A-F0-9]{32})'''
+secretGroup = 2
+keywords = ["steam"]
+
+[[rules]]
+id = "telegram-bot-token"
+description = "Telegram bot token"
+regex = '''[0-9]{8,10}:AA[0-9A-Za-z_-]{33}'''
+keywords = ["telegram", ":AA"]
+
+[allowlist]
+description = "Documented fakes and lockfiles are safe."
+paths = [
+    '''\.env\.example''',
+    '''\.gitleaks\.toml''',
+    '''uv\.lock''',
+    '''SECURITY\.md''',
+]
+# The fake values shipped in .env.example must never trip the scanner.
+regexes = [
+    '''0000000000000000FAKEFAKEFAKE0000''',
+    '''123456789:AAFAKEFAKEFAKEFAKEFAKEFAKEFAKEFAKE''',
+]
