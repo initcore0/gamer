@@ -10,8 +10,8 @@ Built **in public**: there are no secrets in this repo, ever. See [SECURITY.md](
 
 ## Status
 
-**M0 (skeleton & safety rails)** ✅ · **M1 (Steam ingestion)** and **M2 (Telegram
-walking skeleton)** ✅ core paths landed.
+**M0 (safety rails)** ✅ · **M1 (Steam ingestion)** ✅ · **M2 (Telegram)** ✅ ·
+**M3 (scoring & personalization)** ✅ core paths landed.
 
 - **M0** — `uv`/`ruff`/`mypy`(strict)/`pytest`; env-only config with `SecretStr`;
   SQLAlchemy 2.0 async + alembic (Postgres 16 + pgvector); `Source`/`Transport`
@@ -26,10 +26,21 @@ walking skeleton)** ✅ core paths landed.
   `/prefs`, `/digest`) and the 👍/👎/played feedback loop. Wired into the
   scheduler in `jobs.py`.
 
+- **M3** — transparent weighted scorer (a `ScoreComponent`/`Penalty` protocol +
+  a weighted `Assembler`): momentum (7d slope + z-score), hype (news/review
+  velocity), freshness (release/update decay), and `fit` (cosine vs the
+  streamer's taste vector, pgvector). Cooldown/blocklist penalties; a resilient
+  component registry; a scorer service that persists explainable
+  `Recommendation` rows; a backtest harness that replays a past instant; and the
+  feedback→fit loop (👍 builds a profile embedding). `/recommend` and `/why` and
+  the daily digest all run off real scores. *Verified end-to-end against seeded
+  Postgres — a rising game ranks #1 with a human-readable breakdown.*
+
 Known follow-up: the `ISteamApps/GetAppList` catalog endpoint is currently 404ing
 from some networks (player-count ingestion is unaffected) — tracked separately.
 
-Next: **M3** (scoring engine & personalization) — see PLAN.md §6.
+Next: **M4** (enrichment & polish — Ollama summaries, Twitch watchability, RSS,
+news clustering, status page) — see PLAN.md §6.
 
 ## Quick start
 
