@@ -3,24 +3,45 @@ from __future__ import annotations
 from datetime import datetime
 
 import httpx
+import pytest
 import respx
 
+from gamer.config import get_settings
 from gamer.sources import REGISTRY
 from gamer.sources.base import EventKind, FetchContext, RawEvent, Source
 from gamer.sources.steam_api import SteamApiSource
 
 _APP_LIST_URL = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
+_STORE_APP_LIST_URL = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
 _PLAYER_COUNT_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
 
 
-def _source(appids: list[int]) -> SteamApiSource:
+def _source(appids: list[int], *, app_list_page_size: int = 1000) -> SteamApiSource:
     """Build a source with an injected (DB-free), low-retry appids provider."""
     return SteamApiSource(
         appids_provider=lambda: appids,
         rate=1000,
         per=1.0,
         max_attempts=2,
+        app_list_page_size=app_list_page_size,
     )
+
+
+def _set_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Configure a Steam API key so the catalog sync takes the paginated path."""
+    monkeypatch.setenv("GAMER_STEAM__API_KEY", "DEADBEEFDEADBEEFDEADBEEFDEADBEEF")
+    get_settings.cache_clear()
+
+
+def _store_page(apps: list[dict[str, object]], *, last_appid: int, have_more: bool) -> dict:
+    """Shape a fake ``IStoreService/GetAppList/v1`` response page."""
+    return {
+        "response": {
+            "apps": apps,
+            "have_more_results": have_more,
+            "last_appid": last_appid,
+        }
+    }
 
 
 async def _collect(source: SteamApiSource, ctx: FetchContext) -> list[RawEvent]:
@@ -157,3 +178,135 @@ async def test_player_count_500_is_handled_gracefully() -> None:
     # 500 after retries must be swallowed — no exception escapes fetch.
     events = await _collect(source, FetchContext())
     assert events == []
+
+
+# --- Key-authenticated, paginated catalog path (IStoreService/GetAppList/v1) -------
+
+
+@respx.mock
+async def test_paginated_app_list_emits_game_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_key(monkeypatch)
+    route = respx.get(_STORE_APP_LIST_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_store_page(
+                [
+                    {"appid": 10, "name": "Counter-Strike"},
+                    {"appid": 440, "name": "Team Fortress 2"},
+                ],
+                last_appid=440,
+                have_more=False,
+            ),
+        )
+    )
+    source = _source([])  # no tracked games -> no player-count calls
+    events = await _collect(source, FetchContext())
+
+    game_events = [e for e in events if e.kind is EventKind.GAME]
+    assert [e.natural_key for e in game_events] == ["10", "440"]
+    assert game_events[0].payload == {"name": "Counter-Strike"}
+    assert game_events[0].platform_app_id == 10
+    # The preferred key-authenticated endpoint was used, not the keyless dump.
+    assert route.called
+    request = route.calls.last.request
+    assert "key=DEADBEEF" in str(request.url)
+    assert "last_appid=0" in str(request.url)
+
+
+@respx.mock
+async def test_paginated_cursor_advances_across_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The ``last_appid`` cursor must resume past what a prior run already emitted."""
+    _set_key(monkeypatch)
+
+    def _by_cursor(request: httpx.Request) -> httpx.Response:
+        last_appid = int(request.url.params.get("last_appid", "0"))
+        # Full catalog of four apps; the API returns only those *after* the cursor.
+        catalog = [
+            {"appid": 10, "name": "a"},
+            {"appid": 20, "name": "b"},
+            {"appid": 30, "name": "c"},
+            {"appid": 40, "name": "d"},
+        ]
+        remaining = [a for a in catalog if int(a["appid"]) > last_appid]
+        page = remaining[:2]
+        highest = int(page[-1]["appid"]) if page else last_appid
+        have_more = len(remaining) > len(page)
+        return httpx.Response(200, json=_store_page(page, last_appid=highest, have_more=have_more))
+
+    respx.get(_STORE_APP_LIST_URL).mock(side_effect=_by_cursor)
+
+    # page size 2 so each run emits exactly one page and stops.
+    source = _source([], app_list_page_size=2)
+    ctx = FetchContext()
+
+    events1 = await _collect(source, ctx)
+    assert [e.natural_key for e in events1 if e.kind is EventKind.GAME] == ["10", "20"]
+    assert ctx.cursor["last_appid"] == 20
+    assert "last_full_sync" not in ctx.cursor
+
+    events2 = await _collect(source, ctx)
+    assert [e.natural_key for e in events2 if e.kind is EventKind.GAME] == ["30", "40"]
+    # Reached the end of the catalog: cursor resets and a full sync is recorded.
+    assert ctx.cursor["last_appid"] == 0
+    assert "last_full_sync" in ctx.cursor
+
+    # A third run starts a fresh pass from the top.
+    events3 = await _collect(source, ctx)
+    assert [e.natural_key for e in events3 if e.kind is EventKind.GAME] == ["10", "20"]
+
+
+@respx.mock
+async def test_paginated_limit_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_key(monkeypatch)
+    respx.get(_STORE_APP_LIST_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_store_page(
+                [{"appid": i, "name": f"g{i}"} for i in (10, 20, 30, 40, 50)],
+                last_appid=50,
+                have_more=True,
+            ),
+        )
+    )
+    source = _source([])
+    ctx = FetchContext(limit=2)
+    events = await _collect(source, ctx)
+
+    assert [e.natural_key for e in events] == ["10", "20"]
+    assert ctx.cursor["last_appid"] == 20
+    # Budget spent mid-catalog — not a full sync.
+    assert "last_full_sync" not in ctx.cursor
+
+
+@respx.mock
+async def test_paginated_app_list_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 404/403 on the paginated endpoint must not crash the run."""
+    _set_key(monkeypatch)
+    respx.get(_STORE_APP_LIST_URL).mock(return_value=httpx.Response(404))
+    respx.get(_PLAYER_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"response": {"player_count": 9, "result": 1}})
+    )
+    source = _source([730])
+    events = await _collect(source, FetchContext())
+
+    # No catalog rows, but the run continues and player counts still flow.
+    assert [e for e in events if e.kind is EventKind.GAME] == []
+    assert [e.payload for e in events if e.kind is EventKind.PLAYER_COUNT] == [{"players": 9}]
+
+
+@respx.mock
+async def test_no_key_uses_keyless_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without a key, catalog sync falls back to the keyless v2 dump."""
+    monkeypatch.delenv("GAMER_STEAM__API_KEY", raising=False)
+    get_settings.cache_clear()
+
+    keyless = respx.get(_APP_LIST_URL).mock(
+        return_value=httpx.Response(200, json={"applist": {"apps": [{"appid": 5, "name": "x"}]}})
+    )
+    store = respx.get(_STORE_APP_LIST_URL).mock(return_value=httpx.Response(404))
+    source = _source([])
+    events = await _collect(source, FetchContext())
+
+    assert [e.natural_key for e in events if e.kind is EventKind.GAME] == ["5"]
+    assert keyless.called
+    assert not store.called

@@ -1,11 +1,23 @@
 """Steam Web API source adapter (official endpoints only — no scraping).
 
-Covers two official Steam Web API endpoints:
+Covers the official Steam catalog and player-count endpoints:
 
-* ``ISteamApps/GetAppList/v2`` — the full app catalog. Each appid is emitted as
-  an :class:`EventKind.GAME` event (natural key = the appid). The list is huge and
-  mostly static, so we checkpoint our position in ``ctx.cursor`` and resume across
-  runs, honouring ``ctx.limit`` as a soft per-run cap.
+* Catalog sync — the full app catalog, walked in appid order and emitted one
+  :class:`EventKind.GAME` event per app (natural key = the appid). Two endpoints
+  back this, chosen at runtime:
+
+  - ``IStoreService/GetAppList/v1`` (key-authenticated, **preferred**) —
+    server-side paginated via a ``last_appid`` cursor. We advance the cursor
+    across runs, which fits the existing checkpoint design cleanly and avoids
+    downloading the entire list each run.
+  - ``ISteamApps/GetAppList/v2`` (keyless, fallback) — returns the whole list in
+    one response; we sort it and checkpoint an *index* into it. Used only when no
+    Steam key is configured. Note: this endpoint 404s from some networks, which is
+    why the key-authenticated path is preferred whenever a key is available.
+
+  The list is huge and mostly static, so either way we checkpoint our position in
+  ``ctx.cursor`` and resume across runs, honouring ``ctx.limit`` as a soft per-run
+  cap.
 * ``ISteamUserStats/GetNumberOfCurrentPlayers/v1`` — the current concurrent-player
   count for a single app. We poll this for the set of *tracked* games and emit an
   :class:`EventKind.PLAYER_COUNT` sample per game (natural key = ``appid:iso_hour``
@@ -43,7 +55,10 @@ log = get_logger("sources.steam_api")
 _UPSTREAM_ERRORS = (httpx.HTTPError, RetryableStatus)
 
 _BASE = "https://api.steampowered.com"
+# Keyless full-catalog dump (fallback). 404s from some networks — see module docs.
 _APP_LIST_URL = f"{_BASE}/ISteamApps/GetAppList/v2/"
+# Key-authenticated, server-side-paginated catalog (preferred when a key is set).
+_STORE_APP_LIST_URL = f"{_BASE}/IStoreService/GetAppList/v1/"
 _PLAYER_COUNT_URL = f"{_BASE}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
 
 #: Provider of appids to poll for player counts. May be sync or async.
@@ -112,7 +127,107 @@ class SteamApiSource:
     async def _fetch_app_list(
         self, client: PoliteClient, ctx: FetchContext, already_emitted: int
     ) -> AsyncIterator[RawEvent]:
-        """Emit GAME events for a slice of the catalog, checkpointing progress.
+        """Emit GAME events for the catalog, dispatching by whether a key is set.
+
+        Prefers the key-authenticated, server-side-paginated ``IStoreService``
+        endpoint; falls back to the keyless full-list dump when no key is
+        configured. Both honour ``ctx.limit`` and checkpoint into ``ctx.cursor``.
+        """
+        api_key = get_settings().steam.api_key.get_secret_value()
+        if api_key:
+            async for event in self._fetch_app_list_paginated(
+                client, ctx, already_emitted, api_key
+            ):
+                yield event
+        else:
+            async for event in self._fetch_app_list_keyless(client, ctx, already_emitted):
+                yield event
+
+    async def _fetch_app_list_paginated(
+        self, client: PoliteClient, ctx: FetchContext, already_emitted: int, api_key: str
+    ) -> AsyncIterator[RawEvent]:
+        """Walk ``IStoreService/GetAppList/v1`` via its server-side cursor.
+
+        Cursor keys:
+          * ``last_appid`` — the highest appid seen so far; passed back to the API
+            as the pagination cursor so the next run resumes past it. Reset to 0
+            after a full pass so the catalog is re-walked (picking up new appids).
+          * ``last_full_sync`` — ISO timestamp of the last time we reached the end.
+
+        The per-run budget (``ctx.limit`` or ``app_list_page_size``) bounds how many
+        events we emit; we request the API in pages of ``app_list_page_size`` and
+        stop once the budget is spent or the API reports no more results.
+        """
+        if ctx.limit is not None:
+            budget = max(ctx.limit - already_emitted, 0)
+        else:
+            budget = self._app_list_page_size
+        if budget <= 0:
+            return
+
+        last_appid = int(ctx.cursor.get("last_appid", 0))
+        emitted = 0
+        while emitted < budget:
+            params: dict[str, Any] = {
+                "key": api_key,
+                "include_games": True,
+                "max_results": self._app_list_page_size,
+                "last_appid": last_appid,
+            }
+            try:
+                data = await client.get_json(_STORE_APP_LIST_URL, params=params)
+            except _UPSTREAM_ERRORS as exc:
+                log.warning("app_list_fetch_failed", error=f"{type(exc).__name__}: {exc}")
+                return
+
+            response = data.get("response") or {}
+            apps = response.get("apps", [])
+            if not apps:
+                # No apps past this cursor — a completed pass. Reset so we re-walk.
+                ctx.cursor["last_appid"] = 0
+                ctx.cursor["last_full_sync"] = datetime.now(UTC).isoformat()
+                return
+
+            now = datetime.now(UTC)
+            for app in apps:
+                if emitted >= budget:
+                    break
+                appid = app.get("appid")
+                name = app.get("name")
+                if appid is not None:
+                    last_appid = int(appid)
+                if appid is None or name is None:
+                    # Still advance the cursor so a resume never re-scans this app.
+                    ctx.cursor["last_appid"] = last_appid
+                    continue
+                appid_int = int(appid)
+                emitted += 1
+                # Advance the checkpoint *before* yielding: if the consumer stops
+                # here (ctx.limit reached) the abandoned generator never resumes, so
+                # the cursor must already reflect this emitted event.
+                ctx.cursor["last_appid"] = last_appid
+                yield RawEvent(
+                    source=self.name,
+                    kind=EventKind.GAME,
+                    natural_key=str(appid_int),
+                    payload={"name": name},
+                    occurred_at=now,
+                    platform_app_id=appid_int,
+                    fetched_at=now,
+                )
+
+            if not response.get("have_more_results"):
+                # Reached the end of the catalog within budget — full pass done.
+                ctx.cursor["last_appid"] = 0
+                ctx.cursor["last_full_sync"] = now.isoformat()
+                return
+            # API may cap max_results below what we asked; continue from its cursor.
+            last_appid = int(response.get("last_appid", last_appid))
+
+    async def _fetch_app_list_keyless(
+        self, client: PoliteClient, ctx: FetchContext, already_emitted: int
+    ) -> AsyncIterator[RawEvent]:
+        """Emit GAME events for a slice of the keyless full-list dump.
 
         Cursor keys:
           * ``app_list_index`` — resume offset into the (stable-ordered) app list.
