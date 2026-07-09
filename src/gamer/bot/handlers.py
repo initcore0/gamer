@@ -22,6 +22,8 @@ from sqlalchemy import select
 from gamer.db import session_scope
 from gamer.db.models import Feedback, FeedbackVerdict, Game, Recommendation, StreamerPref
 from gamer.logging import get_logger
+from gamer.scoring.base import ScoredRecommendation
+from gamer.scoring.service import recommend as score_recommend
 from gamer.signals.movers import Mover, top_movers
 
 log = get_logger("bot")
@@ -54,8 +56,42 @@ def format_movers_reply(movers: list[Mover]) -> str:
     return "\n".join(lines)
 
 
+def _top_reasons(breakdown: dict[str, object], n: int = 2) -> list[str]:
+    """The ``n`` highest-weighted component reasons, plus any applied penalty."""
+    contribs: list[tuple[float, str]] = []
+    penalties: list[str] = []
+    for key, part in breakdown.items():
+        if not isinstance(part, dict):
+            continue
+        reason = str(part.get("reason", ""))
+        if key.startswith("penalty:"):
+            penalties.append(reason)
+            continue
+        weighted = part.get("weighted")
+        if isinstance(weighted, int | float):
+            contribs.append((float(weighted), reason))
+    contribs.sort(key=lambda x: x[0], reverse=True)
+    reasons = [r for _, r in contribs[:n] if r]
+    reasons.extend(f"⚠ {r}" for r in penalties)
+    return reasons
+
+
+def format_scored_reply(recs: list[ScoredRecommendation]) -> str:
+    lines = ["<b>Recommended for you:</b>"]
+    for i, r in enumerate(recs, start=1):
+        lines.append(f"{i}. <b>{r.name}</b> — {r.score:.2f}")
+        for reason in _top_reasons(r.breakdown):
+            lines.append(f"   • {reason}")
+    return "\n".join(lines)
+
+
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message) -> None:
+    recs = await score_recommend(limit=5)
+    if recs:
+        await message.answer(format_scored_reply(recs), parse_mode="HTML")
+        return
+    # Fallback: the scorer had nothing (no components/candidates yet) → top movers.
     movers = await top_movers(limit=5)
     await message.answer(format_movers_reply(movers), parse_mode="HTML")
 
@@ -88,10 +124,10 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
             parse_mode="HTML",
         )
         return
-    parts = "\n".join(f"• {k}: {v:+.2f}" for k, v in rec.breakdown.items())
-    await message.answer(
-        f"<b>Why {game.name}</b> (score {rec.score:.2f}):\n{parts}", parse_mode="HTML"
+    scored = ScoredRecommendation(
+        game_id=game.id, name=game.name, score=rec.score, breakdown=rec.breakdown
     )
+    await message.answer(f"<b>Why {game.name}</b>\n{scored.why()}", parse_mode="HTML")
 
 
 @router.message(Command("mute"))
@@ -177,6 +213,14 @@ async def on_feedback(callback: CallbackQuery) -> None:
         return
     verdict, rec_id = parsed
     async with session_scope() as session:
+        rec_exists = (
+            await session.execute(select(Recommendation.id).where(Recommendation.id == rec_id))
+        ).scalar_one_or_none()
+        if rec_exists is None:
+            # Stale or forged callback — answer gracefully instead of hitting the
+            # feedback.rec_id foreign key.
+            await callback.answer("That recommendation is gone.")
+            return
         session.add(Feedback(rec_id=rec_id, verdict=verdict))
     log.info("feedback_recorded", rec_id=rec_id, verdict=verdict.value)
     await callback.answer({"up": "👍 Noted!", "down": "👎 Got it.", "played": "🎮 Nice!"}[verdict])

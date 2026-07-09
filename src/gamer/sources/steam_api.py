@@ -43,7 +43,7 @@ from sqlalchemy import select
 from gamer.config import get_settings
 from gamer.db import session_scope
 from gamer.db.models import Game
-from gamer.logging import get_logger
+from gamer.logging import get_logger, redact_secrets
 from gamer.sources.base import EventKind, FetchContext, RawEvent
 from gamer.sources.http import PoliteClient, RetryableStatus
 
@@ -177,7 +177,10 @@ class SteamApiSource:
             try:
                 data = await client.get_json(_STORE_APP_LIST_URL, params=params)
             except _UPSTREAM_ERRORS as exc:
-                log.warning("app_list_fetch_failed", error=f"{type(exc).__name__}: {exc}")
+                # str(exc) can embed the request URL including the API key — redact.
+                log.warning(
+                    "app_list_fetch_failed", error=redact_secrets(f"{type(exc).__name__}: {exc}")
+                )
                 return
 
             response = data.get("response") or {}
@@ -236,7 +239,9 @@ class SteamApiSource:
         try:
             data = await client.get_json(_APP_LIST_URL)
         except _UPSTREAM_ERRORS as exc:
-            log.warning("app_list_fetch_failed", error=f"{type(exc).__name__}: {exc}")
+            log.warning(
+                "app_list_fetch_failed", error=redact_secrets(f"{type(exc).__name__}: {exc}")
+            )
             return
 
         apps = data.get("applist", {}).get("apps", [])
@@ -299,7 +304,8 @@ class SteamApiSource:
 
         for appid in appids:
             now = datetime.now(UTC)
-            iso_hour = now.replace(minute=0, second=0, microsecond=0).isoformat()
+            hour = now.replace(minute=0, second=0, microsecond=0)
+            iso_hour = hour.isoformat()
             params: dict[str, Any] = {"appid": appid}
             if api_key:
                 params["key"] = api_key
@@ -307,10 +313,11 @@ class SteamApiSource:
                 data = await client.get_json(_PLAYER_COUNT_URL, params=params)
             except _UPSTREAM_ERRORS as exc:
                 # 429/5xx (after retries) or timeout — log and stop, per contract.
+                # str(exc) can embed the request URL including the API key — redact.
                 log.warning(
                     "player_count_fetch_failed",
                     appid=appid,
-                    error=f"{type(exc).__name__}: {exc}",
+                    error=redact_secrets(f"{type(exc).__name__}: {exc}"),
                 )
                 return
 
@@ -324,7 +331,10 @@ class SteamApiSource:
                 kind=EventKind.PLAYER_COUNT,
                 natural_key=f"{appid}:{iso_hour}",
                 payload={"players": int(response["player_count"])},
-                occurred_at=now,
+                # Hour-truncated to match the natural key: the sink's uq_sample
+                # constraint dedups on ts, so re-polling within the same hour
+                # must produce the same timestamp to actually be idempotent.
+                occurred_at=hour,
                 platform_app_id=int(appid),
                 fetched_at=now,
             )

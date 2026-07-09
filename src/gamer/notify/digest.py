@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date
 
 from gamer.notify.base import Channel, Notification
+from gamer.scoring.base import ScoredRecommendation
 from gamer.signals.movers import Mover
 
 _STEAM_STORE = "https://store.steampowered.com/app/"
@@ -41,6 +42,45 @@ def build_digest(
         body = "No movement to report yet — still gathering player-count data."
 
     text = f"<b>🎮 Top movers — {day.isoformat()}</b>\n\n{body}"
+    return Notification(
+        channel=channel,
+        text=text,
+        dedup_key=f"digest:{channel.value}:{day.isoformat()}",
+        meta={"parse_mode": "HTML", "disable_web_page_preview": True},
+    )
+
+
+def _top_reason(rec: ScoredRecommendation) -> str:
+    """The single highest-weighted component reason, for the one-line digest."""
+    best: tuple[float, str] | None = None
+    for key, part in rec.breakdown.items():
+        if not isinstance(part, dict) or key.startswith("penalty:"):
+            continue
+        weighted = part.get("weighted")
+        if isinstance(weighted, int | float):
+            reason = str(part.get("reason", ""))
+            if best is None or weighted > best[0]:
+                best = (float(weighted), reason)
+    return best[1] if best else ""
+
+
+def build_scored_digest(
+    recs: list[ScoredRecommendation],
+    *,
+    channel: Channel = Channel.TELEGRAM_GROUP,
+    for_day: date | None = None,
+) -> Notification:
+    """Digest built from real recommendations (M3). One line per pick with its
+    top "why" reason. Same per-day dedup key as :func:`build_digest`.
+    """
+    day = for_day or date.today()
+    if recs:
+        lines = [f"{i}. <b>{r.name}</b> — {_top_reason(r)}" for i, r in enumerate(recs, start=1)]
+        body = "\n".join(lines)
+    else:
+        body = "No picks yet — still gathering signal data."
+
+    text = f"<b>🎮 What to stream — {day.isoformat()}</b>\n\n{body}"
     return Notification(
         channel=channel,
         text=text,
