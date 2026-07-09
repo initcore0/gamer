@@ -81,3 +81,10 @@ def _build_rss() -> Source:
     from gamer.sources.rss import RssSource
 
     return RssSource()
+
+
+@register("switch")
+def _build_switch() -> Source:
+    from gamer.sources.switch import SwitchSource
+
+    return SwitchSource()

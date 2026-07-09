@@ -97,6 +97,24 @@ class HealthSettings(BaseSettings):
     api_port: int = 8080
 
 
+class DiscordSettings(BaseSettings):
+    """Discord webhook transport (M5) — proves the Transport abstraction."""
+
+    webhook_url: SecretStr = SecretStr("")
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.webhook_url.get_secret_value())
+
+
+class SwitchSettings(BaseSettings):
+    """Switch eShop release feed (M5) — proves the platform abstraction."""
+
+    enabled: bool = False
+    # A free public feed of Switch eShop releases (JSON/RSS). Kept configurable.
+    feed_url: str = ""
+
+
 class Settings(BaseSettings):
     """Top-level settings. Instantiated once via :func:`get_settings`."""
 
@@ -120,6 +138,8 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rss: RssSettings = Field(default_factory=RssSettings)
     health: HealthSettings = Field(default_factory=HealthSettings)
+    discord: DiscordSettings = Field(default_factory=DiscordSettings)
+    switch: SwitchSettings = Field(default_factory=SwitchSettings)
 
 
 @lru_cache

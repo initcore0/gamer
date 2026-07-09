@@ -14,14 +14,20 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
-from gamer.config import Settings
+from gamer.config import Settings, get_settings
 from gamer.enrichment.jobs import enrich_news_once
 from gamer.enrichment.llm import LLMSummarizer
 from gamer.health import alert_stale_sources_once
 from gamer.logging import get_logger
-from gamer.notify import Channel, dispatch_pending, enqueue
+from gamer.notify import (
+    Channel,
+    Notification,
+    aclose_transports,
+    build_all_transports,
+    dispatch_pending,
+    enqueue,
+)
 from gamer.notify.digest import build_digest, build_scored_digest
-from gamer.notify.telegram import build_telegram_transports
 from gamer.scheduler import Scheduler
 from gamer.scoring.service import recommend
 from gamer.signals.movers import top_movers
@@ -58,25 +64,39 @@ async def run_digest_once() -> None:
     if not await _digest_enabled():
         log.info("digest_skipped", reason="disabled via /digest off")
         return
+    settings = get_settings()
+
     recs = await recommend(limit=10)
     if recs:
         # Optional LLM blurb (M4). Fail-open: returns None when disabled/unreachable,
         # and the digest then renders exactly as it did before the LLM existed.
         summary = await LLMSummarizer().summarize_digest([r.name for r in recs])
-        notification = build_scored_digest(recs, channel=Channel.TELEGRAM_GROUP, summary=summary)
+
+        def _build(channel: Channel) -> Notification:
+            return build_scored_digest(recs, channel=channel, summary=summary)
+
         source = "scorer"
     else:
         movers = await top_movers(limit=10)
-        notification = build_digest(movers, channel=Channel.TELEGRAM_GROUP)
+
+        def _build(channel: Channel) -> Notification:
+            return build_digest(movers, channel=channel)
+
         source = "movers"
-    await enqueue(notification)
-    transports = build_telegram_transports()
+
+    # Telegram group is always a target; Discord fans out only when configured.
+    # Same content, different channel (and thus a distinct dedup_key) per build.
+    channels = [Channel.TELEGRAM_GROUP]
+    if settings.discord.enabled:
+        channels.append(Channel.DISCORD)
+    for channel in channels:
+        await enqueue(_build(channel))
+
+    transports = build_all_transports(settings)
     try:
         stats = await dispatch_pending(transports)
     finally:
-        # Both transports share one aiogram Bot; close its HTTP session so each
-        # digest run doesn't leak an aiohttp connector.
-        await next(iter(transports.values())).aclose()
+        await aclose_transports(transports)
     log.info("digest_dispatched", source=source, sent=stats.sent, failed=stats.failed)
 
 

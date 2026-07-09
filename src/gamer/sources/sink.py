@@ -6,11 +6,13 @@ them here, and this maps each :class:`EventKind` to idempotent upserts keyed by
 the tables' natural keys. Re-ingesting the same upstream item is a no-op.
 
 Event → table mapping:
-  GAME          → games (upsert on (platform, platform_app_id))
-  PLAYER_COUNT  → signals_samples (metric=players, upsert on (game,metric,ts))
-  REVIEW        → signals_samples (metric=review_count)
-  TWITCH        → signals_samples (metric=twitch_viewers); skipped if unmappable
-  NEWS          → news_items (upsert on (source, external_id))
+  GAME / RELEASE → games (upsert on (platform, platform_app_id))
+  PLAYER_COUNT   → signals_samples (metric=players, upsert on (game,metric,ts))
+  REVIEW         → signals_samples (metric=review_count)
+  TWITCH         → signals_samples (metric=twitch_viewers); skipped if unmappable
+  NEWS           → news_items (upsert on (source, external_id))
+Each event's platform is resolved from ``RawEvent.platform`` (falling back to the
+sink default), so one sink can persist multiple platforms (PLAN.md §5 M5).
 Events for an unknown appid create a stub Game row so samples/news always link.
 """
 
@@ -46,57 +48,90 @@ class DbEventSink:
     """Idempotent persistence of RawEvents. Safe to call repeatedly."""
 
     def __init__(self, *, platform: Platform = Platform.STEAM) -> None:
+        # Default platform for events that don't declare one (Steam sources).
         self._platform = platform
+
+    def _event_platform(self, event: RawEvent) -> Platform | None:
+        """Resolve an event's platform, falling back to the sink default. This is
+        the seam that lets one sink persist multiple platforms (PLAN.md §5 M5).
+
+        Returns ``None`` for an unknown platform value: the sink's contract is
+        that one bad event never aborts the batch, so the caller skips it.
+        """
+        if event.platform is None:
+            return self._platform
+        try:
+            return Platform(event.platform)
+        except ValueError:
+            log.warning(
+                "unknown_platform_skipped",
+                source=event.source,
+                platform=event.platform,
+                natural_key=event.natural_key,
+            )
+            return None
 
     async def persist(self, events: Sequence[RawEvent]) -> int:
         written = 0
         async with session_scope() as session:
-            # Cache appid -> game_id within the batch to avoid repeat lookups.
-            game_ids: dict[int, int] = {}
+            # Cache (platform, app_id) -> game_id within the batch. Keyed by
+            # platform too, since appids are only unique *within* a platform.
+            game_ids: dict[tuple[Platform, int], int] = {}
 
-            async def resolve_game(app_id: int, name: str | None = None) -> int:
-                if app_id in game_ids:
-                    return game_ids[app_id]
+            async def resolve_game(platform: Platform, app_id: int, name: str | None = None) -> int:
+                key = (platform, app_id)
+                if key in game_ids:
+                    return game_ids[key]
                 existing = (
                     await session.execute(
                         select(Game.id).where(
-                            Game.platform == self._platform,
+                            Game.platform == platform,
                             Game.platform_app_id == app_id,
                         )
                     )
                 ).scalar_one_or_none()
                 if existing is not None:
-                    game_ids[app_id] = existing
+                    game_ids[key] = existing
                     return existing
                 stub = Game(
-                    platform=self._platform,
+                    platform=platform,
                     platform_app_id=app_id,
                     name=name or f"app {app_id}",
                 )
                 session.add(stub)
                 await session.flush()
-                game_ids[app_id] = stub.id
+                game_ids[key] = stub.id
                 return stub.id
 
             for event in events:
-                if event.kind is EventKind.GAME:
-                    written += await self._persist_game(session, event, resolve_game, game_ids)
+                platform = self._event_platform(event)
+                if platform is None:
+                    continue  # unknown platform — logged and skipped, batch survives
+                if event.kind in (EventKind.GAME, EventKind.RELEASE):
+                    written += await self._persist_game(
+                        session, event, platform, resolve_game, game_ids
+                    )
                 elif event.kind in (EventKind.PLAYER_COUNT, EventKind.REVIEW, EventKind.TWITCH):
-                    written += await self._persist_sample(session, event, resolve_game)
+                    written += await self._persist_sample(session, event, platform, resolve_game)
                 elif event.kind is EventKind.NEWS:
-                    written += await self._persist_news(session, event, resolve_game)
-                # PRICE / RELEASE: folded into GAME/signals later.
+                    written += await self._persist_news(session, event, platform, resolve_game)
+                # PRICE: folded into GAME/signals later.
         return written
 
     async def _persist_game(
-        self, session: Any, event: RawEvent, resolve_game: Any, game_ids: dict[int, int]
+        self,
+        session: Any,
+        event: RawEvent,
+        platform: Platform,
+        resolve_game: Any,
+        game_ids: dict[tuple[Platform, int], int],
     ) -> int:
         app_id = event.platform_app_id
         if app_id is None:
             return 0
         p = event.payload
         values: dict[str, Any] = {
-            "platform": self._platform,
+            "platform": platform,
             "platform_app_id": app_id,
             "name": p.get("name") or f"app {app_id}",
         }
@@ -125,10 +160,12 @@ class DbEventSink:
             .returning(Game.id)
         )
         game_id = (await session.execute(stmt)).scalar_one()
-        game_ids[app_id] = game_id
+        game_ids[(platform, app_id)] = game_id
         return 1
 
-    async def _persist_sample(self, session: Any, event: RawEvent, resolve_game: Any) -> int:
+    async def _persist_sample(
+        self, session: Any, event: RawEvent, platform: Platform, resolve_game: Any
+    ) -> int:
         app_id = event.platform_app_id
         if app_id is None:
             return 0
@@ -143,7 +180,7 @@ class DbEventSink:
             value = event.payload.get("review_count")
         if value is None:
             return 0
-        game_id = await resolve_game(app_id)
+        game_id = await resolve_game(platform, app_id)
         stmt = (
             insert(SignalSample)
             .values(game_id=game_id, metric=metric, ts=event.occurred_at, value=float(value))
@@ -152,9 +189,11 @@ class DbEventSink:
         result = await session.execute(stmt)
         return int(result.rowcount or 0)
 
-    async def _persist_news(self, session: Any, event: RawEvent, resolve_game: Any) -> int:
+    async def _persist_news(
+        self, session: Any, event: RawEvent, platform: Platform, resolve_game: Any
+    ) -> int:
         app_id = event.platform_app_id
-        game_id = await resolve_game(app_id) if app_id is not None else None
+        game_id = await resolve_game(platform, app_id) if app_id is not None else None
         p = event.payload
         published = _parse_dt(p.get("published_at")) or event.occurred_at
         stmt = (

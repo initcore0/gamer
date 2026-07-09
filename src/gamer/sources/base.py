@@ -45,8 +45,13 @@ class RawEvent:
     natural_key: str
     payload: dict[str, Any]
     occurred_at: datetime
-    # Steam appid (or platform app id) this event is about, when known.
+    # The app-store id this event is about, when known (Steam appid, eShop nsuid…).
     platform_app_id: int | None = None
+    # Which platform this event belongs to — a ``Platform`` enum *value* (e.g.
+    # "steam", "switch"). ``None`` lets the sink apply its default platform, so
+    # existing Steam sources need not set it. This is the seam that makes the
+    # catalog platform-agnostic (PLAN.md §5 M5).
+    platform: str | None = None
     fetched_at: datetime | None = None
     meta: dict[str, Any] = field(default_factory=dict)
 
