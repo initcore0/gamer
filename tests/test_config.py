@@ -48,3 +48,26 @@ def test_twitch_enabled_when_both_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GAMER_TWITCH__CLIENT_SECRET", "secret")
     get_settings.cache_clear()
     assert Settings().twitch.enabled is True
+
+
+def test_rss_feeds_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in list(__import__("os").environ):
+        if key.startswith("GAMER_"):
+            monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+    s = Settings()
+    assert s.rss.enabled is True
+    assert len(s.rss.feeds) == 3
+
+
+def test_rss_feeds_csv_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GAMER_RSS__FEEDS", "https://a.com, https://b.com ,")
+    get_settings.cache_clear()
+    assert Settings().rss.feeds == ["https://a.com", "https://b.com"]
+
+
+def test_health_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GAMER_HEALTH__STALE_AFTER_HOURS", "12")
+    get_settings.cache_clear()
+    assert Settings().health.stale_after_hours == 12
+    assert Settings().health.api_port == 8080

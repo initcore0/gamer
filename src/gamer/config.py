@@ -9,10 +9,10 @@ never renders in logs or ``repr()``.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class DatabaseSettings(BaseSettings):
@@ -65,6 +65,38 @@ class LLMSettings(BaseSettings):
     model: str = "llama3.1:8b"
 
 
+class RssSettings(BaseSettings):
+    """Broader-news RSS feeds (PLAN.md §3). Pluggable list of feed URLs."""
+
+    enabled: bool = True
+    # Comma-separated in the env var (GAMER_RSS__FEEDS=url1,url2). NoDecode stops
+    # pydantic-settings from JSON-parsing it first, so our validator splits the CSV.
+    feeds: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: [
+            "https://www.pcgamer.com/rss/",
+            "https://www.rockpapershotgun.com/feed",
+            "https://www.eurogamer.net/feed",
+        ]
+    )
+
+    @field_validator("feeds", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
+
+
+class HealthSettings(BaseSettings):
+    """Self-reporting / alerting (PLAN.md §6 M4). A source silent longer than
+    ``stale_after_hours`` pings the streamer once."""
+
+    stale_after_hours: int = 24
+    # Status page bind (read-only public build log).
+    api_host: str = "0.0.0.0"
+    api_port: int = 8080
+
+
 class Settings(BaseSettings):
     """Top-level settings. Instantiated once via :func:`get_settings`."""
 
@@ -86,6 +118,8 @@ class Settings(BaseSettings):
     twitch: TwitchSettings = Field(default_factory=TwitchSettings)
     embeddings: EmbeddingsSettings = Field(default_factory=EmbeddingsSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    rss: RssSettings = Field(default_factory=RssSettings)
+    health: HealthSettings = Field(default_factory=HealthSettings)
 
 
 @lru_cache
