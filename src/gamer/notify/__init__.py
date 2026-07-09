@@ -48,6 +48,23 @@ def build_all_transports(settings: Settings | None = None) -> dict[Channel, Tran
     return transports
 
 
+async def aclose_transports(transports: dict[Channel, Transport]) -> None:
+    """Close each distinct transport instance's underlying HTTP resources once.
+
+    Both Telegram transports share one aiogram Bot (same instance would be
+    closed twice without the id-dedup); Discord owns its own client. Transports
+    without an ``aclose`` are skipped — the protocol doesn't require one.
+    """
+    seen: set[int] = set()
+    for transport in transports.values():
+        if id(transport) in seen:
+            continue
+        seen.add(id(transport))
+        aclose = getattr(transport, "aclose", None)
+        if aclose is not None:
+            await aclose()
+
+
 __all__ = [
     "Button",
     "Channel",
@@ -59,6 +76,7 @@ __all__ = [
     "TelegramDM",
     "TelegramGroup",
     "Transport",
+    "aclose_transports",
     "build_all_transports",
     "build_bot",
     "build_discord_transport",

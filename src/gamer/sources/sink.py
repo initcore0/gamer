@@ -51,12 +51,25 @@ class DbEventSink:
         # Default platform for events that don't declare one (Steam sources).
         self._platform = platform
 
-    def _event_platform(self, event: RawEvent) -> Platform:
+    def _event_platform(self, event: RawEvent) -> Platform | None:
         """Resolve an event's platform, falling back to the sink default. This is
-        the seam that lets one sink persist multiple platforms (PLAN.md §5 M5)."""
+        the seam that lets one sink persist multiple platforms (PLAN.md §5 M5).
+
+        Returns ``None`` for an unknown platform value: the sink's contract is
+        that one bad event never aborts the batch, so the caller skips it.
+        """
         if event.platform is None:
             return self._platform
-        return Platform(event.platform)
+        try:
+            return Platform(event.platform)
+        except ValueError:
+            log.warning(
+                "unknown_platform_skipped",
+                source=event.source,
+                platform=event.platform,
+                natural_key=event.natural_key,
+            )
+            return None
 
     async def persist(self, events: Sequence[RawEvent]) -> int:
         written = 0
@@ -92,6 +105,8 @@ class DbEventSink:
 
             for event in events:
                 platform = self._event_platform(event)
+                if platform is None:
+                    continue  # unknown platform — logged and skipped, batch survives
                 if event.kind in (EventKind.GAME, EventKind.RELEASE):
                     written += await self._persist_game(
                         session, event, platform, resolve_game, game_ids

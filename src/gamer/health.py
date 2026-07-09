@@ -25,7 +25,8 @@ from gamer.logging import get_logger
 from gamer.notify import (
     Channel,
     Notification,
-    build_telegram_transports,
+    aclose_transports,
+    build_all_transports,
     dispatch_pending,
     enqueue,
 )
@@ -114,13 +115,14 @@ async def alert_stale_sources_once(
     for source in stale:
         await enqueue(_stale_notification(source, now, settings.health.stale_after_hours))
 
-    transports = build_telegram_transports(settings)
+    # All configured transports, not just Telegram: the dispatcher only selects
+    # channels it carries, so building the full set here means any pending row
+    # (e.g. a Discord digest) can also ride this hourly dispatch.
+    transports = build_all_transports(settings)
     try:
         stats = await dispatch_pending(transports)
     finally:
-        # Both transports share one aiogram Bot; close its HTTP session so each
-        # run doesn't leak an aiohttp connector.
-        await next(iter(transports.values())).aclose()
+        await aclose_transports(transports)
 
     log.info("health.alerted", stale=stale, sent=stats.sent, skipped=stats.skipped)
     return stale

@@ -269,3 +269,31 @@ async def test_switch_games_persist_under_switch_platform(
     assert all(r.platform == Platform.SWITCH for r in rows)
     names = {r.name for r in rows}
     assert "Hollow Knight: Silksong" in names
+
+
+def test_unknown_platform_is_skipped_not_raised() -> None:
+    """The sink's contract: one bad event never aborts the batch. An event with
+    an unknown platform value resolves to None (logged + skipped) instead of
+    raising ValueError and rolling back every good event around it."""
+    from datetime import UTC, datetime
+
+    from gamer.db.models import Platform
+    from gamer.sources.base import EventKind, RawEvent
+    from gamer.sources.sink import DbEventSink
+
+    sink = DbEventSink()
+
+    def _event(platform: str | None) -> RawEvent:
+        return RawEvent(
+            source="test",
+            kind=EventKind.GAME,
+            natural_key="1",
+            payload={"name": "X"},
+            occurred_at=datetime.now(UTC),
+            platform_app_id=1,
+            platform=platform,
+        )
+
+    assert sink._event_platform(_event(None)) is Platform.STEAM
+    assert sink._event_platform(_event("switch")) is Platform.SWITCH
+    assert sink._event_platform(_event("dreamcast")) is None

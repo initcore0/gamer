@@ -19,7 +19,14 @@ from gamer.enrichment.jobs import enrich_news_once
 from gamer.enrichment.llm import LLMSummarizer
 from gamer.health import alert_stale_sources_once
 from gamer.logging import get_logger
-from gamer.notify import Channel, Notification, build_all_transports, dispatch_pending, enqueue
+from gamer.notify import (
+    Channel,
+    Notification,
+    aclose_transports,
+    build_all_transports,
+    dispatch_pending,
+    enqueue,
+)
 from gamer.notify.digest import build_digest, build_scored_digest
 from gamer.scheduler import Scheduler
 from gamer.scoring.service import recommend
@@ -89,19 +96,7 @@ async def run_digest_once() -> None:
     try:
         stats = await dispatch_pending(transports)
     finally:
-        # Telegram transports share one aiogram Bot and Discord owns its HTTP
-        # client; close each distinct underlying resource once so a digest run
-        # doesn't leak a connection. Dedup by object id (both Telegram entries
-        # share a bot, so aclose is idempotent-safe but we still avoid double
-        # work / double-close on the same instance).
-        seen: set[int] = set()
-        for transport in transports.values():
-            if id(transport) in seen:
-                continue
-            seen.add(id(transport))
-            aclose = getattr(transport, "aclose", None)
-            if aclose is not None:
-                await aclose()
+        await aclose_transports(transports)
     log.info("digest_dispatched", source=source, sent=stats.sent, failed=stats.failed)
 
 
