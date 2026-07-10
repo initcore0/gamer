@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
+
+from aiogram.filters import CommandObject
+
 from gamer.bot.handlers import (
+    cmd_track,
+    cmd_untrack,
     format_movers_reply,
     format_scored_reply,
     help_text,
     parse_feedback_action,
+    router,
 )
 from gamer.db.models import FeedbackVerdict
 from gamer.scoring.base import ScoredRecommendation
@@ -57,6 +64,44 @@ def test_format_scored_reply_shows_top_reasons_and_penalty() -> None:
     assert "old release" not in reply
     # Applied penalty is flagged.
     assert "on cooldown" in reply
+
+
+@dataclass
+class _FakeMessage:
+    """Minimal Message stand-in that records what a handler answers."""
+
+    replies: list[str] = field(default_factory=list)
+
+    async def answer(self, text: str, parse_mode: str | None = None) -> None:
+        self.replies.append(text)
+
+
+async def test_track_without_arg_shows_usage() -> None:
+    msg = _FakeMessage()
+    await cmd_track(msg, CommandObject(command="track", args=None))  # type: ignore[arg-type]
+    assert len(msg.replies) == 1
+    assert "Usage" in msg.replies[0]
+    assert "/track" in msg.replies[0]
+
+
+async def test_untrack_without_arg_shows_usage() -> None:
+    msg = _FakeMessage()
+    await cmd_untrack(msg, CommandObject(command="untrack", args=""))  # type: ignore[arg-type]
+    assert len(msg.replies) == 1
+    assert "Usage" in msg.replies[0]
+    assert "/untrack" in msg.replies[0]
+
+
+def test_track_and_untrack_handlers_registered() -> None:
+    names = {h.callback.__name__ for h in router.message.handlers}
+    assert "cmd_track" in names
+    assert "cmd_untrack" in names
+
+
+def test_help_text_lists_track_commands() -> None:
+    text = help_text()
+    assert "/track" in text
+    assert "/untrack" in text
 
 
 def test_help_text_lists_commands_and_is_valid_html() -> None:

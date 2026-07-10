@@ -60,6 +60,9 @@ _APP_LIST_URL = f"{_BASE}/ISteamApps/GetAppList/v2/"
 # Key-authenticated, server-side-paginated catalog (preferred when a key is set).
 _STORE_APP_LIST_URL = f"{_BASE}/IStoreService/GetAppList/v1/"
 _PLAYER_COUNT_URL = f"{_BASE}/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
+# Top ~100 most-played games right now (keyless; include the key when configured).
+# Provides a player-count sample per app *and* the set of appids to auto-track.
+_MOST_PLAYED_URL = f"{_BASE}/ISteamChartsService/GetMostPlayedGames/v1/"
 
 #: Provider of appids to poll for player counts. May be sync or async.
 AppidsProvider = Callable[[], Sequence[int] | Awaitable[Sequence[int]]]
@@ -105,12 +108,17 @@ class SteamApiSource:
         return provided
 
     async def fetch(self, ctx: FetchContext) -> AsyncIterator[RawEvent]:
-        """Yield GAME events (catalog sync) then PLAYER_COUNT events (tracked games).
+        """Yield GAME events (catalog sync), then top-charts events (player-count
+        samples + tracking GAME events for the top ~100), then per-app PLAYER_COUNT
+        events for tracked games.
 
         Honours ``ctx.limit`` and mutates ``ctx.cursor`` in place so a huge catalog
         resumes across runs. Never raises on expected upstream failures.
         """
         emitted = 0
+        # Appids already sampled from the top-charts phase this run — the per-app
+        # phase skips them so we never poll the same appid twice in one run.
+        charted: set[int] = set()
         async with self._client() as client:
             async for event in self._fetch_app_list(client, ctx, emitted):
                 emitted += 1
@@ -118,7 +126,13 @@ class SteamApiSource:
                 if ctx.limit is not None and emitted >= ctx.limit:
                     return
 
-            async for event in self._fetch_player_counts(client):
+            async for event in self._fetch_most_played(client, charted):
+                emitted += 1
+                yield event
+                if ctx.limit is not None and emitted >= ctx.limit:
+                    return
+
+            async for event in self._fetch_player_counts(client, skip=charted):
                 emitted += 1
                 yield event
                 if ctx.limit is not None and emitted >= ctx.limit:
@@ -289,8 +303,76 @@ class SteamApiSource:
         if index >= total:
             ctx.cursor["last_full_sync"] = now.isoformat()
 
-    async def _fetch_player_counts(self, client: PoliteClient) -> AsyncIterator[RawEvent]:
-        """Emit a PLAYER_COUNT sample for each tracked appid (one per hour)."""
+    async def _fetch_most_played(
+        self, client: PoliteClient, charted: set[int]
+    ) -> AsyncIterator[RawEvent]:
+        """Fetch the top-charts once; emit a PLAYER_COUNT sample and a tracking
+        GAME event per charted app, and record the charted appids in ``charted``.
+
+        This is what actually *populates* ``tracked`` — the per-app player-count
+        phase only polls games already flagged tracked, so without this bootstrap
+        nothing would ever be sampled. Degrades (log + return) on upstream failure.
+        """
+        api_key = get_settings().steam.api_key.get_secret_value()
+        params: dict[str, Any] = {}
+        if api_key:
+            params["key"] = api_key
+        try:
+            data = await client.get_json(_MOST_PLAYED_URL, params=params)
+        except _UPSTREAM_ERRORS as exc:
+            # str(exc) can embed the request URL including the API key — redact.
+            log.warning(
+                "most_played_fetch_failed",
+                error=redact_secrets(f"{type(exc).__name__}: {exc}"),
+            )
+            return
+
+        ranks = (data.get("response") or {}).get("ranks", [])
+        now = datetime.now(UTC)
+        hour = now.replace(minute=0, second=0, microsecond=0)
+        iso_hour = hour.isoformat()
+        for entry in ranks:
+            appid = entry.get("appid")
+            if appid is None:
+                continue
+            appid_int = int(appid)
+            charted.add(appid_int)
+            # Mark the charted game tracked. No name in the charts response, so the
+            # payload carries only ``tracked`` — the sink must not clobber any
+            # existing name (and won't, since we omit the "name" key here).
+            yield RawEvent(
+                source=self.name,
+                kind=EventKind.GAME,
+                natural_key=str(appid_int),
+                payload={"tracked": True},
+                occurred_at=now,
+                platform_app_id=appid_int,
+                fetched_at=now,
+            )
+            players = entry.get("concurrent_in_game")
+            if players is None:
+                continue
+            yield RawEvent(
+                source=self.name,
+                kind=EventKind.PLAYER_COUNT,
+                natural_key=f"{appid_int}:{iso_hour}",
+                payload={"players": int(players)},
+                # Hour-truncated to match the natural key (see per-app phase note).
+                occurred_at=hour,
+                platform_app_id=appid_int,
+                fetched_at=now,
+            )
+
+    async def _fetch_player_counts(
+        self, client: PoliteClient, *, skip: set[int] | None = None
+    ) -> AsyncIterator[RawEvent]:
+        """Emit a PLAYER_COUNT sample for each tracked appid (one per hour).
+
+        ``skip`` holds appids already sampled by the top-charts phase this run, so
+        we avoid double-polling; tracked games that fell off the charts are still
+        covered here.
+        """
+        skip = skip or set()
         try:
             appids = await self._resolve_appids()
         except Exception as exc:  # provider is external; degrade, don't crash.
@@ -303,6 +385,8 @@ class SteamApiSource:
         api_key = get_settings().steam.api_key.get_secret_value()
 
         for appid in appids:
+            if int(appid) in skip:
+                continue
             now = datetime.now(UTC)
             hour = now.replace(minute=0, second=0, microsecond=0)
             iso_hour = hour.isoformat()

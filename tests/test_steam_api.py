@@ -14,6 +14,11 @@ from gamer.sources.steam_api import SteamApiSource
 _APP_LIST_URL = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
 _STORE_APP_LIST_URL = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
 _PLAYER_COUNT_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
+_MOST_PLAYED_URL = "https://api.steampowered.com/ISteamChartsService/GetMostPlayedGames/v1/"
+
+
+def _ranks(*entries: dict[str, object]) -> dict:
+    return {"response": {"ranks": list(entries)}}
 
 
 def _source(appids: list[int], *, app_list_page_size: int = 1000) -> SteamApiSource:
@@ -59,6 +64,7 @@ def test_registered_in_registry() -> None:
 
 @respx.mock
 async def test_app_list_emits_game_events() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     respx.get(_APP_LIST_URL).mock(
         return_value=httpx.Response(
             200,
@@ -89,6 +95,7 @@ async def test_app_list_emits_game_events() -> None:
 
 @respx.mock
 async def test_player_count_emits_player_count_events() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
     respx.get(_PLAYER_COUNT_URL).mock(
         return_value=httpx.Response(200, json={"response": {"player_count": 12345, "result": 1}})
@@ -111,6 +118,7 @@ async def test_player_count_emits_player_count_events() -> None:
 
 @respx.mock
 async def test_player_count_skips_apps_without_stats() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
     # result != 1 means the app has no player-count stats — skip it, don't emit.
     respx.get(_PLAYER_COUNT_URL).mock(
@@ -123,6 +131,7 @@ async def test_player_count_skips_apps_without_stats() -> None:
 
 @respx.mock
 async def test_limit_is_honoured_and_cursor_advances() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     apps = [{"appid": i, "name": f"game-{i}"} for i in (1, 2, 3, 4, 5)]
     respx.get(_APP_LIST_URL).mock(
         return_value=httpx.Response(200, json={"applist": {"apps": apps}})
@@ -145,6 +154,7 @@ async def test_limit_is_honoured_and_cursor_advances() -> None:
 
 @respx.mock
 async def test_full_sync_marks_cursor() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     apps = [{"appid": 1, "name": "a"}, {"appid": 2, "name": "b"}]
     respx.get(_APP_LIST_URL).mock(
         return_value=httpx.Response(200, json={"applist": {"apps": apps}})
@@ -158,6 +168,7 @@ async def test_full_sync_marks_cursor() -> None:
 
 @respx.mock
 async def test_app_list_429_is_handled_gracefully() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(429))
     # A tracked game still lets us verify player-count runs after a failed app-list.
     respx.get(_PLAYER_COUNT_URL).mock(
@@ -172,6 +183,7 @@ async def test_app_list_429_is_handled_gracefully() -> None:
 
 @respx.mock
 async def test_player_count_500_is_handled_gracefully() -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
     respx.get(_PLAYER_COUNT_URL).mock(return_value=httpx.Response(500))
     source = _source([440])
@@ -185,6 +197,7 @@ async def test_player_count_500_is_handled_gracefully() -> None:
 
 @respx.mock
 async def test_paginated_app_list_emits_game_events(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     _set_key(monkeypatch)
     route = respx.get(_STORE_APP_LIST_URL).mock(
         return_value=httpx.Response(
@@ -215,6 +228,7 @@ async def test_paginated_app_list_emits_game_events(monkeypatch: pytest.MonkeyPa
 
 @respx.mock
 async def test_paginated_cursor_advances_across_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     """The ``last_appid`` cursor must resume past what a prior run already emitted."""
     _set_key(monkeypatch)
 
@@ -257,6 +271,7 @@ async def test_paginated_cursor_advances_across_runs(monkeypatch: pytest.MonkeyP
 
 @respx.mock
 async def test_paginated_limit_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     _set_key(monkeypatch)
     respx.get(_STORE_APP_LIST_URL).mock(
         return_value=httpx.Response(
@@ -280,6 +295,7 @@ async def test_paginated_limit_is_honoured(monkeypatch: pytest.MonkeyPatch) -> N
 
 @respx.mock
 async def test_paginated_app_list_degrades_gracefully(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     """A 404/403 on the paginated endpoint must not crash the run."""
     _set_key(monkeypatch)
     respx.get(_STORE_APP_LIST_URL).mock(return_value=httpx.Response(404))
@@ -296,6 +312,7 @@ async def test_paginated_app_list_degrades_gracefully(monkeypatch: pytest.Monkey
 
 @respx.mock
 async def test_no_key_uses_keyless_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
     """Without a key, catalog sync falls back to the keyless v2 dump."""
     monkeypatch.delenv("GAMER_STEAM__API_KEY", raising=False)
     get_settings.cache_clear()
@@ -310,3 +327,99 @@ async def test_no_key_uses_keyless_endpoint(monkeypatch: pytest.MonkeyPatch) -> 
     assert [e.natural_key for e in events if e.kind is EventKind.GAME] == ["5"]
     assert keyless.called
     assert not store.called
+
+
+# --- Top-charts phase (ISteamChartsService/GetMostPlayedGames/v1) ------------------
+
+
+@respx.mock
+async def test_most_played_emits_samples_and_tracking_events() -> None:
+    """Each rank entry yields a hour-truncated PLAYER_COUNT sample plus a GAME event
+    that flags the app tracked and carries no name (must not clobber existing names)."""
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+    respx.get(_MOST_PLAYED_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_ranks(
+                {"rank": 1, "appid": 730, "concurrent_in_game": 900000},
+                {"rank": 2, "appid": 570, "concurrent_in_game": 600000},
+            ),
+        )
+    )
+    source = _source([])  # no tracked games -> per-app phase is a no-op
+    events = await _collect(source, FetchContext())
+
+    pc = [e for e in events if e.kind is EventKind.PLAYER_COUNT]
+    assert [e.payload for e in pc] == [{"players": 900000}, {"players": 600000}]
+    for e in pc:
+        _appid_part, iso_hour = e.natural_key.split(":", 1)
+        parsed = datetime.fromisoformat(iso_hour)
+        assert e.natural_key == f"{e.platform_app_id}:{iso_hour}"
+        assert (parsed.minute, parsed.second, parsed.microsecond) == (0, 0, 0)
+        assert e.occurred_at == parsed
+
+    game_events = [e for e in events if e.kind is EventKind.GAME]
+    assert [e.natural_key for e in game_events] == ["730", "570"]
+    for e in game_events:
+        assert e.payload == {"tracked": True}
+        assert "name" not in e.payload
+
+
+@respx.mock
+async def test_most_played_degrades_and_per_app_phase_still_runs() -> None:
+    """A 404/500 on the charts endpoint degrades; the per-app phase still polls."""
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(500))
+    respx.get(_PLAYER_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"response": {"player_count": 11, "result": 1}})
+    )
+    source = _source([440])
+    events = await _collect(source, FetchContext())
+
+    assert [e for e in events if e.kind is EventKind.GAME] == []
+    assert [e.payload for e in events if e.kind is EventKind.PLAYER_COUNT] == [{"players": 11}]
+
+
+@respx.mock
+async def test_per_app_phase_skips_charted_appids() -> None:
+    """An appid sampled from the charts is not polled again by the per-app phase."""
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+    respx.get(_MOST_PLAYED_URL).mock(
+        return_value=httpx.Response(
+            200, json=_ranks({"rank": 1, "appid": 730, "concurrent_in_game": 5000})
+        )
+    )
+    per_app = respx.get(_PLAYER_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"response": {"player_count": 42, "result": 1}})
+    )
+    # 730 is charted (skipped); 999 is tracked-only and still polled per-app.
+    source = _source([730, 999])
+    events = await _collect(source, FetchContext())
+
+    pc = [e for e in events if e.kind is EventKind.PLAYER_COUNT]
+    # One from charts (730), one from per-app (999) — the charted 730 is not re-polled.
+    assert {e.platform_app_id for e in pc} == {730, 999}
+    assert [e.payload for e in pc] == [{"players": 5000}, {"players": 42}]
+    # Per-app endpoint hit exactly once (for 999 only).
+    assert per_app.call_count == 1
+    assert per_app.calls.last.request.url.params.get("appid") == "999"
+
+
+@respx.mock
+async def test_limit_honoured_across_phases() -> None:
+    """ctx.limit caps total events across app-list + charts + per-app phases."""
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+    respx.get(_MOST_PLAYED_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_ranks(
+                {"rank": 1, "appid": 1, "concurrent_in_game": 10},
+                {"rank": 2, "appid": 2, "concurrent_in_game": 20},
+                {"rank": 3, "appid": 3, "concurrent_in_game": 30},
+            ),
+        )
+    )
+    source = _source([])
+    # Each charted app emits 2 events (GAME + PLAYER_COUNT); limit=3 stops mid-charts.
+    events = await _collect(source, FetchContext(limit=3))
+    assert len(events) == 3

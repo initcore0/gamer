@@ -5,6 +5,7 @@ Commands (DM, interactive):
   /recommend    — top movers right now (M2: naive; M3 swaps in the scorer)
   /why <game>   — explain a recommendation's score breakdown
   /mute <game>  — stop recommending a game
+  /track <game>, /untrack <game> — poll / stop polling a game's player count
   /prefs        — show current preferences
   /digest on|off — toggle the group digest
 
@@ -43,6 +44,8 @@ def help_text() -> str:
         "• /recommend — top picks right now, with a one-line reason each\n"
         "• /why &lt;game&gt; — the score breakdown behind a pick\n"
         "• /mute &lt;game&gt; — stop suggesting a game\n"
+        "• /track &lt;game&gt; — start polling a game's player count\n"
+        "• /untrack &lt;game&gt; — stop polling a game's player count\n"
         "• /prefs — show your genres, mutes, and digest setting\n"
         "• /digest on|off — toggle the daily group digest\n"
         "• /help — this message\n"
@@ -178,6 +181,47 @@ async def cmd_mute(message: Message, command: CommandObject) -> None:
         prefs.muted_game_ids = sorted(muted)
         name = game.name
     await message.answer(f"🔇 Muted <b>{name}</b>. I won't recommend it.", parse_mode="HTML")
+
+
+async def _set_tracked(query: str, tracked: bool) -> str | None:
+    """Set ``tracked`` on the first game matching ``query`` (ilike). Returns the
+    game name on success, or ``None`` when nothing matched."""
+    async with session_scope() as session:
+        game = (
+            await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
+        ).scalar_one_or_none()
+        if game is None:
+            return None
+        game.tracked = tracked
+        return game.name
+
+
+@router.message(Command("track"))
+async def cmd_track(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/track &lt;game name&gt;</code>", parse_mode="HTML")
+        return
+    name = await _set_tracked(query, True)
+    if name is None:
+        await message.answer(f"No game matching “{query}”.")
+        return
+    await message.answer(
+        f"📈 Tracking <b>{name}</b> — player counts start within the hour.", parse_mode="HTML"
+    )
+
+
+@router.message(Command("untrack"))
+async def cmd_untrack(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/untrack &lt;game name&gt;</code>", parse_mode="HTML")
+        return
+    name = await _set_tracked(query, False)
+    if name is None:
+        await message.answer(f"No game matching “{query}”.")
+        return
+    await message.answer(f"📉 Stopped tracking <b>{name}</b>.", parse_mode="HTML")
 
 
 @router.message(Command("prefs"))
