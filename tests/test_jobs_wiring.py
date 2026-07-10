@@ -23,6 +23,8 @@ def test_register_jobs_wires_every_source() -> None:
     for source_name in REGISTRY:
         assert f"poll:{source_name}" in names
     assert "digest" not in names  # gated on group_chat_id
+    # UI-M3: the hourly rollup-writer job is always registered.
+    assert ("rollups:refresh", 3600) in sched.registered
 
 
 def test_digest_registered_when_group_configured(monkeypatch) -> None:
