@@ -10,6 +10,19 @@
   <h1>build log status</h1>
   <p class="muted">Generated at {{ status.generated_at }}</p>
 
+  {% if top_movers %}
+    <h2>Top movers (24h)</h2>
+    <div class="movers-strip">
+      {% for m in top_movers %}
+        <a class="mover" href="/games?sort=delta_24h">
+          <span class="mover-name">{{ m.name }}</span>
+          <span class="mover-spark">{{ m.spark | spark }}</span>
+          <span class="num {% if m.delta > 0 %}up{% elif m.delta < 0 %}down{% endif %}">{{ "{:+,.0f}".format(m.delta) }}</span>
+        </a>
+      {% endfor %}
+    </div>
+  {% endif %}
+
   <h2>Counts</h2>
   <table>
     <tbody>

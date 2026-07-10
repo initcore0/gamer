@@ -17,7 +17,17 @@ from gamer.api.queries.games import GamePage, GameRow
 
 _FIXTURE = GamePage(
     rows=[
-        GameRow(id=1, name="Celeste", platform="steam", genres=["Platformer"], tracked=True),
+        GameRow(
+            id=1,
+            name="Celeste",
+            platform="steam",
+            genres=["Platformer"],
+            tracked=True,
+            current_players=1234.0,
+            players_24h_delta=56.0,
+            spark=[1.0, 2.0, 3.0],
+            review_count=9000.0,
+        ),
         GameRow(
             id=2, name="Hades", platform="steam", genres=["Roguelike", "Action"], tracked=False
         ),
@@ -28,11 +38,18 @@ _FIXTURE = GamePage(
 
 def _patch_games(monkeypatch: pytest.MonkeyPatch, page: GamePage = _FIXTURE) -> None:
     async def _fake_list_games(
-        search: str | None = None, cursor: str | None = None, limit: int = 50
+        search: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        **kwargs: object,
     ) -> GamePage:
         return page
 
+    async def _fake_list_genres() -> list[str]:
+        return ["Action", "Platformer", "Roguelike"]
+
     monkeypatch.setattr(games_route.games_q, "list_games", _fake_list_games)
+    monkeypatch.setattr(games_route.games_q, "list_genres", _fake_list_genres)
 
 
 def test_games_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,7 +99,24 @@ def test_games_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
         "platform": "steam",
         "genres": ["Platformer"],
         "tracked": True,
+        "current_players": 1234.0,
+        "players_24h_delta": 56.0,
+        "spark": [1.0, 2.0, 3.0],
+        "review_count": 9000.0,
+        "last_signal_at": None,
     }
+
+
+def test_games_json_invalid_sort_is_422() -> None:
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/games", params={"sort": "bogus"})
+    assert resp.status_code == 422
+
+
+def test_games_json_invalid_platform_is_422() -> None:
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/games", params={"platform": "nintendo64"})
+    assert resp.status_code == 422
 
 
 def test_static_app_css_served() -> None:

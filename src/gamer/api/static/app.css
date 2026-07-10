@@ -214,3 +214,105 @@ tr.stale .badge-stale {
     padding: 0.15rem 0.6rem;
   }
 }
+
+/* ── Catalog filter bar + stat cells (UI_PLAN.md §8 UI-M2) ─────────────────── */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+.filter-bar .search {
+  flex: 1 1 12rem;
+}
+.filter-bar select {
+  padding: 0.35rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+.filter-bar .toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+/* Tabular numerals so counts line up; right-aligned numeric columns. */
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+td.up {
+  color: #16a34a;
+}
+td.down {
+  color: #dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  td.up {
+    color: #4ade80;
+  }
+  td.down {
+    color: #f87171;
+  }
+}
+
+.spark-cell {
+  width: 120px;
+  color: var(--accent);
+}
+.spark {
+  display: block;
+}
+
+/* ── Dashboard top-movers strip (UI_PLAN.md §5.4) ─────────────────────────── */
+
+.movers-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+.mover {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+.mover:hover {
+  border-color: var(--accent);
+}
+.mover-name {
+  font-weight: 600;
+}
+.mover-spark {
+  color: var(--accent);
+  width: 120px;
+}
+.up {
+  color: #16a34a;
+  font-variant-numeric: tabular-nums;
+}
+.down {
+  color: #dc2626;
+  font-variant-numeric: tabular-nums;
+}
+@media (prefers-color-scheme: dark) {
+  .up {
+    color: #4ade80;
+  }
+  .down {
+    color: #f87171;
+  }
+}
