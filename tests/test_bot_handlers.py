@@ -2,15 +2,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
 from aiogram.filters import CommandObject
 
+from gamer.bot import handlers
 from gamer.bot.handlers import (
+    cmd_subscribe,
     cmd_track,
+    cmd_unsubscribe,
     cmd_untrack,
     format_movers_reply,
     format_scored_reply,
     help_text,
     parse_feedback_action,
+    resolve_genre,
     router,
 )
 from gamer.db.models import FeedbackVerdict
@@ -102,6 +107,61 @@ def test_help_text_lists_track_commands() -> None:
     text = help_text()
     assert "/track" in text
     assert "/untrack" in text
+
+
+def test_help_text_lists_subscribe_commands() -> None:
+    text = help_text()
+    assert "/subscribe" in text
+    assert "/unsubscribe" in text
+
+
+# ── /subscribe /unsubscribe (M7) ──────────────────────────────────────────────
+
+
+def test_resolve_genre_case_insensitive_returns_canonical() -> None:
+    canonical, suggestions = resolve_genre("puzzle", ["Puzzle", "RPG", "Indie"])
+    assert canonical == "Puzzle"
+    assert suggestions == []
+
+
+def test_resolve_genre_miss_returns_suggestions() -> None:
+    canonical, suggestions = resolve_genre("puzzel", ["Puzzle", "RPG", "Indie"])
+    assert canonical is None
+    assert "Puzzle" in suggestions
+    assert len(suggestions) <= 5
+
+
+async def test_subscribe_without_arg_shows_usage() -> None:
+    msg = _FakeMessage()
+    await cmd_subscribe(msg, CommandObject(command="subscribe", args=None))  # type: ignore[arg-type]
+    assert "Usage" in msg.replies[0]
+    assert "/subscribe" in msg.replies[0]
+
+
+async def test_unsubscribe_without_arg_shows_usage() -> None:
+    msg = _FakeMessage()
+    await cmd_unsubscribe(msg, CommandObject(command="unsubscribe", args=""))  # type: ignore[arg-type]
+    assert "Usage" in msg.replies[0]
+    assert "/unsubscribe" in msg.replies[0]
+
+
+async def test_subscribe_unknown_genre_suggests_close_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _fake_known() -> list[str]:
+        return ["Puzzle", "RPG", "Indie"]
+
+    monkeypatch.setattr(handlers, "known_genres", _fake_known)
+    msg = _FakeMessage()
+    await cmd_subscribe(msg, CommandObject(command="subscribe", args="puzzel"))  # type: ignore[arg-type]
+    assert "No genre matching" in msg.replies[0]
+    assert "Puzzle" in msg.replies[0]
+
+
+async def test_subscribe_registered() -> None:
+    names = {h.callback.__name__ for h in router.message.handlers}
+    assert "cmd_subscribe" in names
+    assert "cmd_unsubscribe" in names
 
 
 def test_help_text_lists_commands_and_is_valid_html() -> None:

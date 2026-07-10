@@ -6,6 +6,7 @@ Commands (DM, interactive):
   /why <game>   — explain a recommendation's score breakdown
   /mute <game>  — stop recommending a game
   /track <game>, /untrack <game> — poll / stop polling a game's player count
+  /subscribe <genre>, /unsubscribe <genre> — always-cover a genre (M7)
   /prefs        — show current preferences
   /digest on|off — toggle the group digest
 
@@ -16,11 +17,14 @@ this stays unit-testable without a live Telegram connection.
 
 from __future__ import annotations
 
+import difflib
+
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import select
 
+from gamer.catalog.genre_tracking import known_genres, track_subscribed_genres
 from gamer.db import session_scope
 from gamer.db.models import Feedback, FeedbackVerdict, Game, Recommendation, StreamerPref
 from gamer.logging import get_logger
@@ -46,6 +50,8 @@ def help_text() -> str:
         "• /mute &lt;game&gt; — stop suggesting a game\n"
         "• /track &lt;game&gt; — start polling a game's player count\n"
         "• /untrack &lt;game&gt; — stop polling a game's player count\n"
+        "• /subscribe &lt;genre&gt; — always cover a genre (auto-tracks + boosts it)\n"
+        "• /unsubscribe &lt;genre&gt; — stop covering a genre\n"
         "• /prefs — show your genres, mutes, and digest setting\n"
         "• /digest on|off — toggle the daily group digest\n"
         "• /help — this message\n"
@@ -224,15 +230,92 @@ async def cmd_untrack(message: Message, command: CommandObject) -> None:
     await message.answer(f"📉 Stopped tracking <b>{name}</b>.", parse_mode="HTML")
 
 
+def resolve_genre(query: str, catalog: list[str]) -> tuple[str | None, list[str]]:
+    """Resolve ``query`` to a catalog genre's canonical casing (case-insensitive).
+
+    Pure. Returns ``(canonical, [])`` on a match; on a miss returns
+    ``(None, suggestions)`` with up to 5 close matches (``difflib``).
+    """
+    lowered = query.strip().lower()
+    for genre in catalog:
+        if genre.lower() == lowered:
+            return genre, []
+    suggestions = difflib.get_close_matches(query, catalog, n=5, cutoff=0.5)
+    return None, suggestions
+
+
+def _no_match_reply(query: str, suggestions: list[str]) -> str:
+    if suggestions:
+        hint = ", ".join(suggestions)
+        return f"No genre matching “{query}”. Did you mean: <b>{hint}</b>?"
+    return f"No genre matching “{query}”."
+
+
+@router.message(Command("subscribe"))
+async def cmd_subscribe(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/subscribe &lt;genre&gt;</code>", parse_mode="HTML")
+        return
+    canonical, suggestions = resolve_genre(query, await known_genres())
+    if canonical is None:
+        await message.answer(_no_match_reply(query, suggestions), parse_mode="HTML")
+        return
+
+    async with session_scope() as session:
+        prefs = (
+            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
+        ).scalar_one_or_none()
+        if prefs is None:
+            prefs = StreamerPref(key=_PREF_KEY)
+            session.add(prefs)
+        subs = list(prefs.subscribed_genres or [])
+        if not any(s.lower() == canonical.lower() for s in subs):
+            subs.append(canonical)
+            prefs.subscribed_genres = subs
+
+    # Kick off coverage now instead of waiting for the hourly tick.
+    tracked = await track_subscribed_genres([canonical])
+    await message.answer(
+        f"🧩 Subscribed to <b>{canonical}</b> — tracking {tracked} games in this genre.",
+        parse_mode="HTML",
+    )
+
+
+@router.message(Command("unsubscribe"))
+async def cmd_unsubscribe(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/unsubscribe &lt;genre&gt;</code>", parse_mode="HTML")
+        return
+    lowered = query.lower()
+    async with session_scope() as session:
+        prefs = (
+            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
+        ).scalar_one_or_none()
+        subs = list(prefs.subscribed_genres or []) if prefs else []
+        match = next((s for s in subs if s.lower() == lowered), None)
+        if match is None or prefs is None:
+            await message.answer(f"You're not subscribed to “{query}”.")
+            return
+        prefs.subscribed_genres = [s for s in subs if s.lower() != lowered]
+    await message.answer(
+        f"🚫 Unsubscribed from <b>{match}</b>. (Already-tracked games stay tracked.)",
+        parse_mode="HTML",
+    )
+
+
 @router.message(Command("prefs"))
 async def cmd_prefs(message: Message) -> None:
     prefs = await _get_prefs()
     liked = ", ".join(prefs.liked_genres) or "—"
     blocked = ", ".join(prefs.blocked_genres) or "—"
+    subscribed = ", ".join(prefs.subscribed_genres) or "—"
     await message.answer(
         "<b>Your preferences</b>\n"
         f"Liked genres: {liked}\n"
         f"Blocked genres: {blocked}\n"
+        f"Subscribed genres: {subscribed}\n"
         f"Muted games: {len(prefs.muted_game_ids or [])}\n"
         f"Group digest: {'on' if prefs.digest_enabled else 'off'}",
         parse_mode="HTML",
