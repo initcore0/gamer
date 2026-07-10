@@ -65,12 +65,25 @@ def _top_reason(rec: ScoredRecommendation) -> str:
     return best[1] if best else ""
 
 
+def _game_link(base_url: str, rec: ScoredRecommendation) -> str:
+    """A per-game deep link ``<a href="{base}/games/{id}">↗</a>`` (UI_PLAN.md §6).
+
+    The base URL is operator-configured, not user input, but it is still HTML-
+    escaped so a stray ``&``/``<`` can never break Telegram's HTML parse_mode.
+    Discord's ``html_to_discord_markdown`` already converts ``<a href>`` to a
+    markdown link, so the same markup works on both channels.
+    """
+    href = escape(f"{base_url}/games/{rec.game_id}", quote=True)
+    return f' <a href="{href}">↗</a>'
+
+
 def build_scored_digest(
     recs: list[ScoredRecommendation],
     *,
     channel: Channel = Channel.TELEGRAM_GROUP,
     for_day: date | None = None,
     summary: str | None = None,
+    public_base_url: str = "",
 ) -> Notification:
     """Digest built from real recommendations (M3). One line per pick with its
     top "why" reason. Same per-day dedup key as :func:`build_digest`.
@@ -78,10 +91,19 @@ def build_scored_digest(
     ``summary`` is the optional human-sounding blurb from the LLM (M4). When given,
     it is rendered as an italic intro line above the picks; when ``None`` the digest
     is byte-for-byte what it was before the LLM feature existed.
+
+    ``public_base_url`` (UI_PLAN.md §6) is the web UI's public origin. When set,
+    each pick gains a ``{base}/games/{id}`` deep link so a bot message lands on
+    the game page. Empty (the default) => no link appended, and the digest is
+    byte-identical to before this feature.
     """
     day = for_day or date.today()
+    base = public_base_url.rstrip("/")
     if recs:
-        lines = [f"{i}. <b>{r.name}</b> — {_top_reason(r)}" for i, r in enumerate(recs, start=1)]
+        lines = [
+            f"{i}. <b>{r.name}</b> — {_top_reason(r)}{_game_link(base, r) if base else ''}"
+            for i, r in enumerate(recs, start=1)
+        ]
         body = "\n".join(lines)
     else:
         body = "No picks yet — still gathering signal data."

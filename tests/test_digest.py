@@ -98,6 +98,48 @@ def test_scored_digest_none_summary_matches_current_output() -> None:
     assert "<i>" not in baseline.text
 
 
+def test_scored_digest_no_base_url_is_byte_identical() -> None:
+    # UI_PLAN.md §6: with public_base_url unset, the digest is byte-for-byte the
+    # pre-deep-link output (default and explicit "" both).
+    baseline = build_scored_digest(_one_rec(), for_day=date(2026, 7, 9))
+    empty = build_scored_digest(_one_rec(), for_day=date(2026, 7, 9), public_base_url="")
+    assert empty.text == baseline.text
+    assert "/games/" not in baseline.text
+
+
+def test_scored_digest_appends_game_deep_links() -> None:
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        public_base_url="https://gamer.example.com",
+    )
+    assert '<a href="https://gamer.example.com/games/1">↗</a>' in n.text
+    assert "Rising Star" in n.text
+
+
+def test_scored_digest_deep_link_trailing_slash_normalized() -> None:
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        public_base_url="https://gamer.example.com/",
+    )
+    # No doubled slash before /games.
+    assert "https://gamer.example.com/games/1" in n.text
+    assert "com//games" not in n.text
+
+
+def test_scored_digest_deep_link_base_url_escaped() -> None:
+    # The base URL is operator config, but a stray & must still be escaped so it
+    # can't break Telegram's HTML parse_mode.
+    n = build_scored_digest(
+        _one_rec(),
+        for_day=date(2026, 7, 9),
+        public_base_url="https://x.test/?a=1&b=2",
+    )
+    assert "&amp;b=2" in n.text
+    assert "&b=2" not in n.text.replace("&amp;b=2", "")
+
+
 def test_mover_math() -> None:
     m = Mover(game_id=1, name="X", platform_app_id=1, latest=150, baseline=100)
     assert m.delta == 50

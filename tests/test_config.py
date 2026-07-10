@@ -73,6 +73,14 @@ def test_health_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().health.api_port == 8080
 
 
+def test_ui_public_base_url_default_and_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    get_settings.cache_clear()
+    assert Settings().ui.public_base_url == ""  # deep links disabled by default
+    monkeypatch.setenv("GAMER_UI__PUBLIC_BASE_URL", "https://gamer.example.com")
+    get_settings.cache_clear()
+    assert Settings().ui.public_base_url == "https://gamer.example.com"
+
+
 def test_llm_openai_backend_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GAMER_LLM__API", "openai")
     monkeypatch.setenv("GAMER_LLM__OPENAI_BASE_URL", "http://box:8080/v1")

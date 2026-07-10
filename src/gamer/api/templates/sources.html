@@ -1,0 +1,64 @@
+{#
+  Sources ops view (UI_PLAN.md §3.6, UI-M4). Per-source cards with last run /
+  success, a STALE badge, and a recent-jobs table; plus a 14-day event bar chart
+  (samples per day) rendered server-side via the |bars svg helper.
+  `cards` is a list of queries.sources.SourceCard; `events` the per-day counts;
+  `event_bars` a float-only series for |bars (the sole |safe output here).
+#}
+{% extends "base.html" %}
+{% set active = 'sources' %}
+{% block title %}gamer — sources{% endblock %}
+{% block content %}
+  <h1>Sources</h1>
+
+  <section class="events">
+    <h2>Events per day (14d)</h2>
+    <div class="events-chart">{{ event_bars | bars }}</div>
+    <table class="events-table">
+      <thead><tr><th>Day</th><th class="num">Samples</th><th class="num">News</th><th class="num">Games</th></tr></thead>
+      <tbody>
+        {% for d in events %}
+          <tr>
+            <td>{{ d.day }}</td>
+            <td class="num">{{ "{:,}".format(d.samples) }}</td>
+            <td class="num">{{ "{:,}".format(d.news) }}</td>
+            <td class="num">{{ "{:,}".format(d.games) }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  {% for card in cards %}
+    <section class="source-card {% if card.stale %}stale{% endif %}">
+      <h2>
+        {{ card.source }}
+        {% if card.stale %}<span class="badge-stale">⚠️ STALE</span>{% else %}<span class="badge">ok</span>{% endif %}
+      </h2>
+      <p class="muted">
+        Last run {{ card.last_run_at or "—" }} · last success {{ card.last_success_at or "—" }}
+      </p>
+      <table class="jobs-table">
+        <thead>
+          <tr><th>Status</th><th>Started</th><th class="num">Duration</th><th class="num">Emitted</th><th class="num">Written</th><th>Error</th></tr>
+        </thead>
+        <tbody>
+          {% for j in card.jobs %}
+            <tr class="{% if j.status == 'error' %}job-error{% endif %}">
+              <td>{{ j.status }}</td>
+              <td>{{ j.started_at }}</td>
+              <td class="num">{% if j.duration_s is not none %}{{ "%.1fs"|format(j.duration_s) }}{% else %}—{% endif %}</td>
+              <td class="num">{% if j.emitted is not none %}{{ j.emitted }}{% else %}—{% endif %}</td>
+              <td class="num">{% if j.written is not none %}{{ j.written }}{% else %}—{% endif %}</td>
+              <td class="job-err">{{ j.error or "" }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6">No jobs recorded yet.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% else %}
+    <p class="empty">No sources have run yet.</p>
+  {% endfor %}
+{% endblock %}

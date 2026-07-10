@@ -18,9 +18,11 @@ router = APIRouter()
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request) -> HTMLResponse:
     payload = await status_q.build_status()
-    # Top-movers strip reads the precomputed game_stats (UI_PLAN.md §5.4); it is
-    # UI-only, so it stays out of the backward-compatible /status JSON payload.
+    # Top-movers strip, latest recs, and last-digest are UI-only (game_id links,
+    # digest state) — kept out of the backward-compatible /status JSON payload.
     movers = await status_q.top_movers()
+    latest_recs = await status_q.latest_recommendations()
+    last_digest = await status_q.last_digest()
     return templates.TemplateResponse(
         request,
         "dashboard.html",
@@ -28,6 +30,8 @@ async def dashboard(request: Request) -> HTMLResponse:
             "status": payload,
             "stale_sources": payload["stale_sources"],
             "top_movers": movers,
+            "latest_recs": latest_recs,
+            "last_digest": last_digest,
         },
     )
 

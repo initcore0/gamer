@@ -1,0 +1,35 @@
+{#
+  Shared score-bars partial (UI_PLAN.md §3.3/§3.4, UI-M4). Renders a
+  recommendation's component/penalty breakdown as labelled bars. Used by the
+  game-detail score panel and by each recommendation-feed <details> expander.
+
+  Expects `bars` (list of dicts from routes.game_detail._breakdown_bars) and
+  `penalties` (from _breakdown_penalties). Autoescape is ON; nothing here uses
+  |safe — bar widths are server-formatted floats, not user strings.
+#}
+<ul class="bars">
+  {% for bar in bars %}
+  <li class="bar-row">
+    <span class="bar-key">{{ bar.key }}</span>
+    <span class="bar-track">
+      <span class="bar-fill {% if bar.positive %}pos{% else %}neg{% endif %}"
+            style="width: {{ "%.1f"|format(bar.width_pct) }}%"></span>
+    </span>
+    <span class="bar-value {% if bar.positive %}up{% else %}down{% endif %}">
+      {{ "%+.3f"|format(bar.weighted) }}
+    </span>
+    <span class="bar-reason">{{ bar.reason }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% if penalties %}
+<ul class="penalties">
+  {% for p in penalties %}
+  <li>
+    <span class="penalty-key">penalty: {{ p.key }}</span>
+    {% if p.multiplier is not none %}<span class="penalty-mult">×{{ "%.2f"|format(p.multiplier) }}</span>{% endif %}
+    <span class="penalty-reason">{{ p.reason }}</span>
+  </li>
+  {% endfor %}
+</ul>
+{% endif %}

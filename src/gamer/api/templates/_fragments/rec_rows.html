@@ -1,0 +1,47 @@
+{#
+  HTMX fragment: recommendation-feed run groups + a "load more" control
+  (UI_PLAN.md §3.4, UI-M4). Returned alone for HX-Request load-more, and included
+  by recommendations.html for the full page.
+
+  `groups` is a list of queries.recs.RunGroup (rows grouped by minute);
+  `bars_by_rec` maps rec id -> {bars, penalties} for each expandable <details>.
+  The score-bars markup is the shared _fragments/score_bars.html partial.
+  Autoescape is ON; the only |safe output is the score-bar widths (server floats).
+#}
+{% for group in groups %}
+  <section class="run-group">
+    <h3 class="run-head">Run · {{ group.minute.strftime("%Y-%m-%d %H:%M") }}</h3>
+    {% for row in group.rows %}
+      <details class="rec-row">
+        <summary>
+          <a class="rec-game" href="/games/{{ row.game_id }}">{{ row.game_name }}</a>
+          <span class="rec-score num">{{ "%.2f"|format(row.score) }}</span>
+          {% if row.sent_at %}<span class="badge sent">sent</span>{% else %}<span class="badge unsent">unsent</span>{% endif %}
+          <span class="rec-feedback">
+            {% if row.feedback.up %}👍 {{ row.feedback.up }}{% endif %}
+            {% if row.feedback.down %}👎 {{ row.feedback.down }}{% endif %}
+            {% if row.feedback.played %}🎮 {{ row.feedback.played }}{% endif %}
+          </span>
+        </summary>
+        {% set bars = bars_by_rec[row.id].bars %}
+        {% set penalties = bars_by_rec[row.id].penalties %}
+        {% include "_fragments/score_bars.html" %}
+      </details>
+    {% endfor %}
+  </section>
+{% else %}
+  {% if not page.next_cursor %}
+    <p class="empty">No recommendations yet.</p>
+  {% endif %}
+{% endfor %}
+{% if page.next_cursor %}
+  <div id="rec-load-more">
+    <a class="load-more"
+       href="/recommendations?cursor={{ page.next_cursor | urlencode }}"
+       hx-get="/recommendations?cursor={{ page.next_cursor | urlencode }}"
+       hx-target="#rec-load-more"
+       hx-swap="outerHTML">
+      Load more
+    </a>
+  </div>
+{% endif %}

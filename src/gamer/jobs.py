@@ -75,7 +75,12 @@ async def run_digest_once() -> None:
         summary = await LLMSummarizer().summarize_digest([r.name for r in recs])
 
         def _build(channel: Channel) -> Notification:
-            return build_scored_digest(recs, channel=channel, summary=summary)
+            return build_scored_digest(
+                recs,
+                channel=channel,
+                summary=summary,
+                public_base_url=settings.ui.public_base_url,
+            )
 
         source = "scorer"
     else:
