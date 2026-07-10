@@ -17,12 +17,13 @@ this stays unit-testable without a live Telegram connection.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
 import hashlib
 from dataclasses import dataclass
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
@@ -619,8 +620,14 @@ async def on_genre(callback: CallbackQuery) -> None:
         else:
             await callback.answer(f"Unsubscribed from {canonical}.")
         await _rerender_genres(callback, action.page)
-    except TelegramBadRequest:
-        raise
+    except TelegramBadRequest as exc:
+        # e.g. editing a >48h-old panel or an inaccessible message. The tap must
+        # still be answered or the client shows an endless spinner; suppress a
+        # possible double-answer (the toggle path answers before re-rendering).
+        log.warning("genre_callback_edit_failed", error=exc.message)
+        with contextlib.suppress(TelegramAPIError):
+            await callback.answer("That panel is stale — send /genres again.")
     except Exception as exc:  # degrade, don't crash: DB error etc.
         log.warning("genre_callback_failed", error=str(exc))
-        await callback.answer("Something went wrong — try again.")
+        with contextlib.suppress(TelegramAPIError):
+            await callback.answer("Something went wrong — try again.")

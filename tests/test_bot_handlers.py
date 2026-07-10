@@ -437,3 +437,37 @@ def test_genre_handlers_registered() -> None:
     cb_names = {h.callback.__name__ for h in router.callback_query.handlers}
     assert "cmd_genres" in msg_names
     assert "on_genre" in cb_names
+
+
+async def test_genre_callback_stale_panel_still_answers(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Editing a >48h-old panel raises TelegramBadRequest — the tap must still be
+    answered (no endless spinner), not re-raised out of the handler."""
+    from aiogram.exceptions import TelegramBadRequest
+
+    from gamer.bot import handlers
+
+    answers: list[str | None] = []
+
+    class _FakeMsg:
+        async def edit_reply_markup(self, reply_markup=None):  # type: ignore[no-untyped-def]
+            raise TelegramBadRequest(method=None, message="message can't be edited")
+
+    class _FakeCallback:
+        data = "genre:p:0"
+        message = _FakeMsg()
+
+        async def answer(self, text: str | None = None) -> None:
+            answers.append(text)
+
+    async def fake_known_genres() -> list[str]:
+        return ["Puzzle"]
+
+    async def fake_subscribed_set() -> set[str]:
+        return set()
+
+    monkeypatch.setattr(handlers, "known_genres", fake_known_genres)
+    monkeypatch.setattr(handlers, "_subscribed_set", fake_subscribed_set)
+
+    await handlers.on_genre(_FakeCallback())  # type: ignore[arg-type]
+    assert answers, "callback was never answered"
+    assert "stale" in (answers[-1] or "")
