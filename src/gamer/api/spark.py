@@ -23,6 +23,16 @@ _MARKUP_CHARS = (
 )
 SVG_ALPHABET = set("0123456789.-eE +,") | set(_MARKUP_CHARS)
 
+# Alphabet for the bar-chart helper below — same discipline as SVG_ALPHABET: the
+# fixed markup tokens plus the numeric characters coordinates may contain. Tested
+# so a future edit that leaks a raw string is caught.
+_BARS_MARKUP_CHARS = (
+    '<svg class="bars" viewBox="0 0 " width="" height="" '
+    'preserveAspectRatio="none"><rect x="" y="" width="" height="" '
+    'fill="currentColor"/></svg>'
+)
+BARS_SVG_ALPHABET = set("0123456789.-eE +,") | set(_BARS_MARKUP_CHARS)
+
 
 def spark_svg(points: list[float], width: int = 120, height: int = 28) -> str:
     """Render ``points`` as a minimal polyline sparkline SVG string.
@@ -64,4 +74,44 @@ def spark_svg(points: list[float], width: int = 120, height: int = 28) -> str:
         f'width="{w:g}" height="{h:g}" preserveAspectRatio="none">'
         f'<polyline fill="none" stroke="currentColor" stroke-width="1" '
         f'points="{pts}"/></svg>'
+    )
+
+
+def bars_svg(values: list[float], width: int = 240, height: int = 60) -> str:
+    """Render ``values`` as a minimal server-side ``<rect>`` bar chart SVG string.
+
+    Like :func:`spark_svg`, the sole other ``|safe`` template output — built
+    **exclusively from floats** and fixed tokens, so it is injection-proof by
+    construction and safe to mark ``|safe``. Bars are ``fill="currentColor"`` so
+    they inherit the surrounding text colour.
+
+    * ``< 1`` value → ``""`` (nothing to draw).
+    * Negative values are clamped to ``0`` (event counts are non-negative).
+    * Heights scale to the largest value; an all-zero series draws no bars.
+    """
+    if len(values) < 1:
+        return ""
+
+    vals = [max(0.0, float(v)) for v in values]
+    w = float(width)
+    h = float(height)
+    hi = max(vals)
+
+    n = len(vals)
+    slot = w / n
+    bar_w = slot * 0.8
+    gap = slot * 0.1
+
+    rects: list[str] = []
+    for i, v in enumerate(vals):
+        bar_h = 0.0 if hi == 0.0 else (v / hi) * h
+        x = i * slot + gap
+        y = h - bar_h
+        rects.append(
+            f'<rect x="{x:g}" y="{y:g}" width="{bar_w:g}" height="{bar_h:g}" fill="currentColor"/>'
+        )
+    body = "".join(rects)
+    return (
+        f'<svg class="bars" viewBox="0 0 {w:g} {h:g}" '
+        f'width="{w:g}" height="{h:g}" preserveAspectRatio="none">{body}</svg>'
     )

@@ -14,12 +14,13 @@ from typing import Any, TypedDict
 from sqlalchemy import func, select
 
 from gamer.db import session_scope
-from gamer.db.models import Game, GameStats, NewsItem, Recommendation, SignalSample
+from gamer.db.models import Game, GameStats, NewsItem, Outbox, Recommendation, SignalSample
 from gamer.health import find_stale_sources
 from gamer.sources.runner import latest_source_status
 
 _RECENT_REC_LIMIT = 10
 _TOP_MOVERS_LIMIT = 5
+_LATEST_REC_LIMIT = 5
 
 
 class Counts(TypedDict):
@@ -40,6 +41,17 @@ class TopMover(TypedDict):
     name: str
     delta: float
     spark: list[float]
+
+
+class LatestRecommendation(TypedDict):
+    game_id: int
+    name: str
+    score: float
+
+
+class LastDigest(TypedDict):
+    channel: str
+    sent_at: str | None
 
 
 class StatusPayload(TypedDict):
@@ -117,6 +129,49 @@ async def top_movers() -> list[TopMover]:
         )
         for game_id, name, delta, spark in rows
     ]
+
+
+async def latest_recommendations() -> list[LatestRecommendation]:
+    """Latest few recommendations with game_id, for the dashboard strip.
+
+    UI-only (links to ``/games/{id}`` and ``/recommendations``) — deliberately
+    separate from :func:`recent_recommendations`, whose shape is frozen by the
+    backward-compatible ``/status`` payload.
+    """
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(Recommendation.game_id, Game.name, Recommendation.score)
+                .join(Game, Game.id == Recommendation.game_id)
+                .order_by(Recommendation.created_at.desc())
+                .limit(_LATEST_REC_LIMIT)
+            )
+        ).all()
+    return [
+        LatestRecommendation(game_id=int(game_id), name=name, score=round(float(score), 4))
+        for game_id, name, score in rows
+    ]
+
+
+async def last_digest() -> LastDigest | None:
+    """The most recently created digest outbox row (channel + sent_at), or None.
+
+    Matches ``dedup_key LIKE 'digest:%'`` (all digest channels). UI-only, so it
+    stays out of the backward-compatible ``/status`` payload.
+    """
+    async with session_scope() as session:
+        row = (
+            await session.execute(
+                select(Outbox.channel, Outbox.sent_at)
+                .where(Outbox.dedup_key.like("digest:%"))
+                .order_by(Outbox.created_at.desc())
+                .limit(1)
+            )
+        ).first()
+    if row is None:
+        return None
+    channel, sent_at = row
+    return LastDigest(channel=str(channel), sent_at=sent_at.isoformat() if sent_at else None)
 
 
 async def build_status(*, now: datetime | None = None) -> StatusPayload:

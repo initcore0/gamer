@@ -76,32 +76,7 @@
     {% if breakdown %}
     <section class="score-panel">
       <h2>Why this game <span class="score">score {{ "%.2f"|format(breakdown.score) }}</span></h2>
-      <ul class="bars">
-        {% for bar in bars %}
-        <li class="bar-row">
-          <span class="bar-key">{{ bar.key }}</span>
-          <span class="bar-track">
-            <span class="bar-fill {% if bar.positive %}pos{% else %}neg{% endif %}"
-                  style="width: {{ "%.1f"|format(bar.width_pct) }}%"></span>
-          </span>
-          <span class="bar-value {% if bar.positive %}up{% else %}down{% endif %}">
-            {{ "%+.3f"|format(bar.weighted) }}
-          </span>
-          <span class="bar-reason">{{ bar.reason }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% if penalties %}
-      <ul class="penalties">
-        {% for p in penalties %}
-        <li>
-          <span class="penalty-key">penalty: {{ p.key }}</span>
-          {% if p.multiplier is not none %}<span class="penalty-mult">×{{ "%.2f"|format(p.multiplier) }}</span>{% endif %}
-          <span class="penalty-reason">{{ p.reason }}</span>
-        </li>
-        {% endfor %}
-      </ul>
-      {% endif %}
+      {% include "_fragments/score_bars.html" %}
     </section>
     {% endif %}
 

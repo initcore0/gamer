@@ -25,7 +25,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from gamer.api.queries.status import StatusPayload, build_status
-from gamer.api.routes import dashboard, game_detail, games
+from gamer.api.routes import dashboard, game_detail, games, news, recs, sources
 from gamer.api.templating import STATIC_DIR
 from gamer.config import Settings, get_settings
 from gamer.logging import get_logger
@@ -69,6 +69,9 @@ def build_api(settings: Settings | None = None) -> FastAPI:
     app.include_router(dashboard.router)
     app.include_router(games.router)
     app.include_router(game_detail.router)
+    app.include_router(recs.router)
+    app.include_router(news.router)
+    app.include_router(sources.router)
     return app
 
 

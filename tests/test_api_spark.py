@@ -59,3 +59,48 @@ def test_no_injection_even_with_huge_values() -> None:
     m = re.search(r'points="([^"]+)"', out)
     assert m is not None
     assert all(c in "0123456789.-eE ," for c in m.group(1))
+
+
+# ── bars_svg (UI-M4 sources bar chart) ──────────────────────────────────────
+from gamer.api.spark import BARS_SVG_ALPHABET, bars_svg  # noqa: E402
+
+
+def test_bars_empty_is_empty_string() -> None:
+    assert bars_svg([]) == ""
+
+
+def test_bars_single_value_renders_one_rect() -> None:
+    out = bars_svg([5.0], width=100, height=20)
+    assert out.startswith("<svg")
+    assert out.count("<rect") == 1
+    assert 'fill="currentColor"' in out
+
+
+def test_bars_all_zero_draws_no_height() -> None:
+    out = bars_svg([0.0, 0.0, 0.0])
+    # Zero-height bars: every rect has height="0".
+    assert 'height="0"' in out
+
+
+def test_bars_scales_to_max() -> None:
+    out = bars_svg([1.0, 2.0], width=100, height=20)
+    import re
+
+    heights = [float(h) for h in re.findall(r'<rect[^>]*height="([^"]+)"', out)]
+    # Tallest bar reaches full height; the half-value bar is half as tall.
+    assert max(heights) == 20.0
+    assert min(heights) == 10.0
+
+
+def test_bars_negative_clamped_to_zero() -> None:
+    out = bars_svg([-5.0, 10.0])
+    import re
+
+    heights = [float(h) for h in re.findall(r'<rect[^>]*height="([^"]+)"', out)]
+    assert 0.0 in heights
+
+
+def test_bars_output_uses_only_alphabet() -> None:
+    out = bars_svg([1.0, 3.5, 2.0, 9.0, 4.25, 0.0, 100.0])
+    leftover = set(out) - BARS_SVG_ALPHABET
+    assert leftover == set(), f"unexpected chars: {leftover!r}"

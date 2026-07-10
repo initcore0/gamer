@@ -460,3 +460,69 @@ td.down {
   margin: 2rem auto;
   text-align: center;
 }
+
+/* ── UI-M4: dashboard tiles, recs, sources ─────────────────────────────────── */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 0.5rem 0 1rem;
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+.tile:hover { border-color: var(--accent); }
+.tile-num { font-size: 1.6rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile-label { color: var(--muted); font-size: 0.85rem; }
+.stale-banner {
+  display: block;
+  padding: 0.6rem 0.9rem;
+  margin: 0.5rem 0;
+  border-radius: 0.5rem;
+  background: var(--stale-bg);
+  color: var(--stale-fg);
+  text-decoration: none;
+  font-weight: 600;
+}
+.last-digest { margin-top: 0; }
+
+/* Recommendation feed. */
+.run-group { margin: 1rem 0; }
+.run-head { font-size: 0.9rem; color: var(--muted); margin: 0.5rem 0 0.25rem; }
+.rec-row { border-bottom: 1px solid var(--border); padding: 0.35rem 0; }
+.rec-row summary {
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+.rec-game { color: var(--fg); text-decoration: none; font-weight: 600; }
+.rec-score { font-variant-numeric: tabular-nums; }
+.badge.sent { background: var(--badge-bg); color: var(--accent); }
+.badge.unsent { background: var(--badge-bg); color: var(--muted); }
+.rec-feedback { color: var(--muted); font-size: 0.85rem; margin-left: auto; }
+
+/* Sources ops view. */
+.events-chart { color: var(--accent); margin: 0.5rem 0; }
+.events-chart .bars { width: 100%; height: 60px; }
+.source-card {
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+  padding: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+.source-card.stale { background: var(--stale-bg); }
+.jobs-table, .events-table { width: 100%; font-size: 0.85rem; }
+.job-error td { color: var(--stale-fg); }
+.job-err {
+  max-width: 24rem;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}

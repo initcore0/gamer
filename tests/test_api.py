@@ -57,9 +57,17 @@ def _patch_status(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_top_movers() -> list[dict[str, Any]]:
         return [{"game_id": 1, "name": "Hades", "delta": 500.0, "spark": [1.0, 2.0, 3.0]}]
 
+    async def _fake_latest_recs() -> list[dict[str, Any]]:
+        return [{"game_id": 1, "name": "Hades", "score": 0.91}]
+
+    async def _fake_last_digest() -> dict[str, Any] | None:
+        return {"channel": "telegram_group", "sent_at": "2026-07-09T10:00:00+00:00"}
+
     monkeypatch.setattr(api_app, "build_status", _fake_build_status)
     monkeypatch.setattr(dashboard_route.status_q, "build_status", _fake_build_status)
     monkeypatch.setattr(dashboard_route.status_q, "top_movers", _fake_top_movers)
+    monkeypatch.setattr(dashboard_route.status_q, "latest_recommendations", _fake_latest_recs)
+    monkeypatch.setattr(dashboard_route.status_q, "last_digest", _fake_last_digest)
 
 
 def test_status_shape(monkeypatch: pytest.MonkeyPatch) -> None:

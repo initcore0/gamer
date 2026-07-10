@@ -1,0 +1,35 @@
+{#
+  News stream page (UI_PLAN.md §3.5, UI-M4). Cluster-grouped across sources,
+  newest first, filterable by source (HTMX select like the catalog) and game_id.
+  The cards + load-more come from _fragments/news_cards.html.
+  `page` is a queries.news.NewsPage; `sources` the distinct-source allowlist.
+#}
+{% extends "base.html" %}
+{% set active = 'news' %}
+{% block title %}gamer — news{% endblock %}
+{% block content %}
+  <h1>News</h1>
+
+  <form id="news-filters"
+        class="filter-bar"
+        hx-get="/news"
+        hx-target="#news-cards"
+        hx-swap="innerHTML"
+        hx-include="#news-filters"
+        hx-trigger="change">
+    <select name="source" aria-label="Source">
+      <option value="">All sources</option>
+      {% for s in sources %}
+        <option value="{{ s }}" {% if filters.source == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+    {% if filters.game_id %}
+      <input type="hidden" name="game_id" value="{{ filters.game_id }}">
+      <span class="muted">filtered to game #{{ filters.game_id }}</span>
+    {% endif %}
+  </form>
+
+  <div id="news-cards" class="news-list">
+    {% include "_fragments/news_cards.html" %}
+  </div>
+{% endblock %}

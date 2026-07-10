@@ -104,6 +104,19 @@ class HealthSettings(BaseSettings):
     api_port: int = 8080
 
 
+class UISettings(BaseSettings):
+    """Web-UI options (UI_PLAN.md §6).
+
+    ``public_base_url`` is the externally reachable origin of the read-only web
+    UI (e.g. ``https://gamer.example.com``). When set, the daily digest appends a
+    per-game deep link ``{public_base_url}/games/{id}`` to each pick so a bot
+    message lands on the game page. Empty (the default) disables deep links, and
+    digests are then byte-identical to before this feature.
+    """
+
+    public_base_url: str = ""
+
+
 class DiscordSettings(BaseSettings):
     """Discord webhook transport (M5) — proves the Transport abstraction."""
 
@@ -145,6 +158,7 @@ class Settings(BaseSettings):
     llm: LLMSettings = Field(default_factory=LLMSettings)
     rss: RssSettings = Field(default_factory=RssSettings)
     health: HealthSettings = Field(default_factory=HealthSettings)
+    ui: UISettings = Field(default_factory=UISettings)
     discord: DiscordSettings = Field(default_factory=DiscordSettings)
     switch: SwitchSettings = Field(default_factory=SwitchSettings)
 

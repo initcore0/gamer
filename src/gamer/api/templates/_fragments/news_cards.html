@@ -1,0 +1,45 @@
+{#
+  HTMX fragment: cluster-deduped news cards + a "load more" control
+  (UI_PLAN.md §3.5, UI-M4). Returned alone for HX-Request filter/load-more, and
+  included by news.html for the full page. `page` is a queries.news.NewsPage;
+  `filters` carries the current source/game_id so load-more keeps them.
+  Autoescape is ON; external links use rel="noopener". Nothing uses |safe.
+#}
+{% for card in page.cards %}
+  <article class="news-card">
+    <a class="news-title" href="{{ card.url or '#' }}" rel="noopener" target="_blank">{{ card.title }}</a>
+    <div class="news-meta">
+      <span class="badge news-source">{{ card.source }}</span>
+      <span class="news-date">{{ card.published_at.date() }}</span>
+      {% if filters.game_id %}<a class="news-game" href="/games/{{ filters.game_id }}">game ↗</a>{% endif %}
+    </div>
+    {% if card.similar_count > 0 %}
+    <details class="news-similar">
+      <summary>+{{ card.similar_count }} similar</summary>
+      <ul>
+        {% for s in card.similar %}
+        <li>
+          <a href="{{ s.url or '#' }}" rel="noopener" target="_blank">{{ s.title }}</a>
+          <span class="news-source">{{ s.source }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </details>
+    {% endif %}
+  </article>
+{% else %}
+  {% if not page.next_cursor %}
+    <p class="empty">No news found.</p>
+  {% endif %}
+{% endfor %}
+{% if page.next_cursor %}
+  <div id="news-load-more">
+    <a class="load-more"
+       href="/news?cursor={{ page.next_cursor | urlencode }}{% if filters.source %}&source={{ filters.source | urlencode }}{% endif %}{% if filters.game_id %}&game_id={{ filters.game_id }}{% endif %}"
+       hx-get="/news?cursor={{ page.next_cursor | urlencode }}{% if filters.source %}&source={{ filters.source | urlencode }}{% endif %}{% if filters.game_id %}&game_id={{ filters.game_id }}{% endif %}"
+       hx-target="#news-load-more"
+       hx-swap="outerHTML">
+      Load more
+    </a>
+  </div>
+{% endif %}
