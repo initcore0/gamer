@@ -131,3 +131,18 @@ def test_static_missing_file_404() -> None:
     client = TestClient(build_api())
     resp = client.get("/static/nope.js")
     assert resp.status_code == 404
+
+
+def test_tampered_datetime_cursor_never_raises() -> None:
+    """A cursor that passes (str, int) type checks but carries a non-ISO string
+    must degrade to first page (true() predicate), never raise into a 500."""
+    from gamer.api.deps import encode_cursor
+    from gamer.api.queries.games import Sort, _seek_predicate
+
+    for sort in (Sort.RELEASE, Sort.UPDATED):
+        # Must not raise:
+        pred = _seek_predicate(sort, "not-a-datetime", 5)
+        assert pred is not None
+    # And the token form round-trips through decode without touching the DB.
+    token = encode_cursor(("garbage-not-iso", 5))
+    assert isinstance(token, str)

@@ -147,9 +147,11 @@ def _seek_predicate(sort: Sort, last_value: Any, last_id: int) -> ColumnElement[
 
     if sort is Sort.RELEASE:
         # release_date DESC NULLS LAST; cursor value is an ISO string or null.
-        dt = datetime.fromisoformat(last_value) if isinstance(last_value, str) else None
-        if dt is None:
+        if last_value is None:
             return and_(col.is_(None), Game.id > last_id)
+        dt = _parse_cursor_dt(last_value)
+        if dt is None:
+            return true()  # unparseable (tampered) cursor value → first page
         return or_(
             col < dt,
             col.is_(None),
@@ -157,10 +159,24 @@ def _seek_predicate(sort: Sort, last_value: Any, last_id: int) -> ColumnElement[
         )
 
     # updated_at DESC (NOT NULL); cursor value is an ISO string.
-    dt = datetime.fromisoformat(last_value) if isinstance(last_value, str) else None
+    dt = _parse_cursor_dt(last_value)
     if dt is None:
-        return Game.id > last_id
+        return true()  # unparseable (tampered) cursor value → first page
     return or_(col < dt, and_(col == dt, Game.id > last_id))
+
+
+def _parse_cursor_dt(value: Any) -> datetime | None:
+    """Parse a cursor's ISO datetime value; ``None`` for anything unusable.
+
+    Cursor type validation only pins ``str`` — a hand-edited token can still
+    carry a non-ISO string, and that must degrade to first page, never 500.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
 
 
 def _next_cursor_value(sort: Sort, row_tuple: tuple[Any, ...]) -> Any:
