@@ -54,8 +54,12 @@ def _patch_status(monkeypatch: pytest.MonkeyPatch) -> None:
 
     # app.py's legacy /status and the dashboard route each hold their own
     # reference to build_status — patch both binding sites.
+    async def _fake_top_movers() -> list[dict[str, Any]]:
+        return [{"game_id": 1, "name": "Hades", "delta": 500.0, "spark": [1.0, 2.0, 3.0]}]
+
     monkeypatch.setattr(api_app, "build_status", _fake_build_status)
     monkeypatch.setattr(dashboard_route.status_q, "build_status", _fake_build_status)
+    monkeypatch.setattr(dashboard_route.status_q, "top_movers", _fake_top_movers)
 
 
 def test_status_shape(monkeypatch: pytest.MonkeyPatch) -> None:

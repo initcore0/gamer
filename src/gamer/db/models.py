@@ -147,6 +147,52 @@ class SignalRollup(Base):
     samples: Mapped[int] = mapped_column(Integer, nullable=False)
 
 
+# ── Precomputed list-row stats (UI_PLAN.md §5.4) ─────────────────────────────
+
+
+class GameStats(Base):
+    """Precomputed per-game catalog-row stats (UI_PLAN.md §5.4, UI-M2).
+
+    Refreshed by the ``stats:refresh`` job every 15 min from ``signals_samples``
+    so list pages join this small table instead of aggregating raw samples per
+    row at request time. One row per game; ``game_id`` is both PK and FK.
+
+    Sort-supporting indexes use ``NULLS LAST`` to match the keyset ordering of
+    the catalog's numeric sorts.
+    """
+
+    __tablename__ = "game_stats"
+
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), primary_key=True
+    )
+    current_players: Mapped[float | None] = mapped_column(Float)
+    players_24h_delta: Mapped[float | None] = mapped_column(Float)
+    # ≤21 floats, oldest→newest; [] when no data (never NULL).
+    players_7d_spark: Mapped[list[float]] = mapped_column(JSONB, nullable=False, default=list)
+    review_count: Mapped[float | None] = mapped_column(Float)
+    twitch_viewers: Mapped[float | None] = mapped_column(Float)
+    last_signal_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+# Sort indexes (DESC NULLS LAST) — declared post-class so the columns resolve.
+Index(
+    "ix_game_stats_players",
+    GameStats.current_players.desc().nulls_last(),
+)
+Index(
+    "ix_game_stats_delta",
+    GameStats.players_24h_delta.desc().nulls_last(),
+)
+Index(
+    "ix_game_stats_reviews",
+    GameStats.review_count.desc().nulls_last(),
+)
+
+
 # ── News + enrichment ────────────────────────────────────────────────────────
 
 

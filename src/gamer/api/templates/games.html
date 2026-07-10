@@ -1,7 +1,11 @@
 {#
-  Catalog list page (UI_PLAN.md §8 UI-M1, §4.2 search seed).
-  Full page; the rows table body is swapped by HTMX search / load-more via the
-  _fragments/game_rows.html partial. `page` is a queries.games.GamePage.
+  Catalog list page (UI_PLAN.md §8 UI-M2 — the headline feature).
+  Full page; the rows table body is swapped by HTMX search/filter/sort/load-more
+  via the _fragments/game_rows.html partial. `page` is a queries.games.GamePage.
+
+  The filter form is HTMX-enabled (hx-get /games, hx-target #game-rows,
+  hx-include the whole form) AND works as plain GET params — progressive
+  enhancement, shareable URLs.
 #}
 {% extends "base.html" %}
 {% set active = 'games' %}
@@ -9,21 +13,61 @@
 {% block content %}
   <h1>Games</h1>
 
-  <input
-    type="search"
-    name="q"
-    class="search"
-    placeholder="Search games…"
-    value="{{ q or '' }}"
-    autocomplete="off"
-    hx-get="/games"
-    hx-trigger="keyup changed delay:250ms"
-    hx-target="#game-rows"
-    hx-swap="innerHTML">
+  <form id="filters"
+        class="filter-bar"
+        hx-get="/games"
+        hx-target="#game-rows"
+        hx-swap="innerHTML"
+        hx-include="#filters"
+        hx-trigger="change, keyup changed delay:250ms from:[name='q']">
+    <input
+      type="search"
+      name="q"
+      class="search"
+      placeholder="Search games…"
+      value="{{ filters.q or '' }}"
+      autocomplete="off">
+
+    <select name="platform" aria-label="Platform">
+      <option value="">All platforms</option>
+      {% for p in platforms %}
+        <option value="{{ p }}" {% if filters.platform == p %}selected{% endif %}>{{ p }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="genre" aria-label="Genre">
+      <option value="">All genres</option>
+      {% for g in genres %}
+        <option value="{{ g }}" {% if filters.genre == g %}selected{% endif %}>{{ g }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="sort" aria-label="Sort">
+      {% for s in sorts %}
+        <option value="{{ s }}" {% if filters.sort == s %}selected{% endif %}>{{ s }}</option>
+      {% endfor %}
+    </select>
+
+    <label class="toggle">
+      <input type="checkbox" name="tracked" value="true" {% if filters.tracked %}checked{% endif %}> tracked
+    </label>
+    <label class="toggle">
+      <input type="checkbox" name="active" value="true" {% if filters.active %}checked{% endif %}> active
+    </label>
+  </form>
 
   <table>
     <thead>
-      <tr><th>Name</th><th>Platform</th><th>Genres</th><th>Tracked</th></tr>
+      <tr>
+        <th>Name</th>
+        <th>Platform</th>
+        <th>Genres</th>
+        <th class="num">Players</th>
+        <th class="num">24h</th>
+        <th>Trend</th>
+        <th class="num">Reviews</th>
+        <th>Tracked</th>
+      </tr>
     </thead>
     <tbody id="game-rows">
       {% include "_fragments/game_rows.html" %}

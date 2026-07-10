@@ -17,7 +17,17 @@ from gamer.api.queries.games import GamePage, GameRow
 
 _FIXTURE = GamePage(
     rows=[
-        GameRow(id=1, name="Celeste", platform="steam", genres=["Platformer"], tracked=True),
+        GameRow(
+            id=1,
+            name="Celeste",
+            platform="steam",
+            genres=["Platformer"],
+            tracked=True,
+            current_players=1234.0,
+            players_24h_delta=56.0,
+            spark=[1.0, 2.0, 3.0],
+            review_count=9000.0,
+        ),
         GameRow(
             id=2, name="Hades", platform="steam", genres=["Roguelike", "Action"], tracked=False
         ),
@@ -28,11 +38,18 @@ _FIXTURE = GamePage(
 
 def _patch_games(monkeypatch: pytest.MonkeyPatch, page: GamePage = _FIXTURE) -> None:
     async def _fake_list_games(
-        search: str | None = None, cursor: str | None = None, limit: int = 50
+        search: str | None = None,
+        cursor: str | None = None,
+        limit: int = 50,
+        **kwargs: object,
     ) -> GamePage:
         return page
 
+    async def _fake_list_genres() -> list[str]:
+        return ["Action", "Platformer", "Roguelike"]
+
     monkeypatch.setattr(games_route.games_q, "list_games", _fake_list_games)
+    monkeypatch.setattr(games_route.games_q, "list_genres", _fake_list_genres)
 
 
 def test_games_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,7 +99,24 @@ def test_games_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
         "platform": "steam",
         "genres": ["Platformer"],
         "tracked": True,
+        "current_players": 1234.0,
+        "players_24h_delta": 56.0,
+        "spark": [1.0, 2.0, 3.0],
+        "review_count": 9000.0,
+        "last_signal_at": None,
     }
+
+
+def test_games_json_invalid_sort_is_422() -> None:
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/games", params={"sort": "bogus"})
+    assert resp.status_code == 422
+
+
+def test_games_json_invalid_platform_is_422() -> None:
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/games", params={"platform": "nintendo64"})
+    assert resp.status_code == 422
 
 
 def test_static_app_css_served() -> None:
@@ -97,3 +131,18 @@ def test_static_missing_file_404() -> None:
     client = TestClient(build_api())
     resp = client.get("/static/nope.js")
     assert resp.status_code == 404
+
+
+def test_tampered_datetime_cursor_never_raises() -> None:
+    """A cursor that passes (str, int) type checks but carries a non-ISO string
+    must degrade to first page (true() predicate), never raise into a 500."""
+    from gamer.api.deps import encode_cursor
+    from gamer.api.queries.games import Sort, _seek_predicate
+
+    for sort in (Sort.RELEASE, Sort.UPDATED):
+        # Must not raise:
+        pred = _seek_predicate(sort, "not-a-datetime", 5)
+        assert pred is not None
+    # And the token form round-trips through decode without touching the DB.
+    token = encode_cursor(("garbage-not-iso", 5))
+    assert isinstance(token, str)

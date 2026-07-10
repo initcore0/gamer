@@ -1,20 +1,23 @@
-"""Catalog routes (UI_PLAN.md §3.2 / §8 UI-M1).
+"""Catalog routes (UI_PLAN.md §3.2 / §8 UI-M2).
 
-``GET /games`` renders the paginated list — the full page normally, or just the
-rows fragment when HTMX asks (``HX-Request`` header) for search/load-more.
+``GET /games`` renders the paginated, filterable, sortable catalog — the full
+page normally, or just the rows fragment when HTMX asks (``HX-Request``).
 ``GET /api/v1/games`` is the JSON twin. Both call
-:func:`queries.games.list_games`; query params are parsed here, never SQL.
+:func:`queries.games.list_games`; query params are parsed/validated here (via
+FastAPI ``Enum``/``Literal`` typing so bad values 422 rather than 500), never SQL.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 
 from gamer.api.queries import games as games_q
+from gamer.api.queries.games import Sort
 from gamer.api.templating import templates
+from gamer.db.models import Platform
 
 router = APIRouter()
 
@@ -24,11 +27,40 @@ async def games_page(
     request: Request,
     q: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
+    platform: Platform | None = Query(default=None),
+    genre: str | None = Query(default=None),
+    tracked: bool = Query(default=False),
+    active: bool = Query(default=False),
+    sort: Sort = Query(default=Sort.NAME),
 ) -> HTMLResponse:
-    page = await games_q.list_games(search=q, cursor=cursor)
-    context = {"page": page, "q": q}
-    # HTMX search/load-more want only the rows; a normal navigation wants the
-    # full page. The header check is the single fragment-vs-page switch (§4).
+    page = await games_q.list_games(
+        search=q,
+        cursor=cursor,
+        platform=platform.value if platform else None,
+        genre=genre,
+        tracked_only=tracked,
+        active_only=active,
+        sort=sort.value,
+    )
+    genres = await games_q.list_genres()
+    filters = {
+        "q": q,
+        "platform": platform.value if platform else "",
+        "genre": genre or "",
+        "tracked": tracked,
+        "active": active,
+        "sort": sort.value,
+    }
+    context = {
+        "page": page,
+        "q": q,
+        "filters": filters,
+        "genres": genres,
+        "platforms": [p.value for p in Platform],
+        "sorts": [s.value for s in Sort],
+    }
+    # HTMX filter/search/load-more want only the rows; a normal navigation wants
+    # the full page. The header check is the single fragment-vs-page switch (§4).
     template = "_fragments/game_rows.html" if request.headers.get("HX-Request") else "games.html"
     return templates.TemplateResponse(request, template, context)
 
@@ -37,9 +69,26 @@ async def games_page(
 async def games_json(
     q: str | None = Query(default=None),
     cursor: str | None = Query(default=None),
+    platform: Platform | None = Query(default=None),
+    genre: str | None = Query(default=None),
+    tracked: bool = Query(default=False),
+    active: bool = Query(default=False),
+    sort: Sort = Query(default=Sort.NAME),
     limit: int = Query(default=games_q.DEFAULT_LIMIT, ge=1, le=200),
 ) -> dict[str, Any]:
-    page = await games_q.list_games(search=q, cursor=cursor, limit=limit)
+    try:
+        page = await games_q.list_games(
+            search=q,
+            cursor=cursor,
+            limit=limit,
+            platform=platform.value if platform else None,
+            genre=genre,
+            tracked_only=tracked,
+            active_only=active,
+            sort=sort.value,
+        )
+    except ValueError as exc:  # allowlist rejection → 422, never a 500.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "games": [
             {
@@ -48,6 +97,11 @@ async def games_json(
                 "platform": row.platform,
                 "genres": row.genres,
                 "tracked": row.tracked,
+                "current_players": row.current_players,
+                "players_24h_delta": row.players_24h_delta,
+                "spark": row.spark,
+                "review_count": row.review_count,
+                "last_signal_at": row.last_signal_at.isoformat() if row.last_signal_at else None,
             }
             for row in page.rows
         ],

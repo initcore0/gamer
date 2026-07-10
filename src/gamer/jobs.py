@@ -31,6 +31,7 @@ from gamer.notify.digest import build_digest, build_scored_digest
 from gamer.scheduler import Scheduler
 from gamer.scoring.service import recommend
 from gamer.signals.movers import top_movers
+from gamer.signals.stats import refresh_game_stats
 from gamer.sources import REGISTRY
 from gamer.sources.runner import run_source
 from gamer.sources.sink import DbEventSink
@@ -121,6 +122,11 @@ async def run_health_check_once() -> None:
     await alert_stale_sources_once()
 
 
+async def run_stats_refresh_once() -> None:
+    """Recompute the precomputed catalog-row stats (UI_PLAN.md §5.4)."""
+    await refresh_game_stats()
+
+
 def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
     """Register source-poll jobs and the daily digest with the scheduler."""
     for name, factory in REGISTRY.items():
@@ -139,3 +145,6 @@ def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
 
     # Self-health: hourly stale-source check that pings the streamer once/day.
     scheduler.add_interval_job(run_health_check_once, seconds=3600, name="health")
+
+    # Precomputed catalog-row stats so /games never aggregates signals per row.
+    scheduler.add_interval_job(run_stats_refresh_once, seconds=15 * 60, name="stats:refresh")
