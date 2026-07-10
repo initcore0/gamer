@@ -1,10 +1,9 @@
-"""Status API tests.
+"""Status/dashboard API tests (UI_PLAN.md §8 UI-M1).
 
-``/health`` is liveness only and must work with no database — its test is a
-plain unit test. ``/status`` and ``/`` touch the DB via helper coroutines; we
-monkeypatch those helpers so the endpoints can be exercised through FastAPI's
-``TestClient`` without a live Postgres. A DB-backed ``/status`` smoke test is
-marked ``@pytest.mark.integration``.
+``/health`` is liveness only and must work with no database — a plain unit test.
+The dashboard / ``/status`` / ``/api/v1/status`` endpoints touch the DB via
+``queries.status.build_status``; we monkeypatch it so the routes run through
+FastAPI without a live Postgres. A DB-backed smoke test is ``@integration``.
 """
 
 from __future__ import annotations
@@ -15,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import gamer.api.app as api_app
+import gamer.api.routes.dashboard as dashboard_route
 from gamer.api import build_api
 
 _FAKE_STATUS: dict[str, Any] = {
@@ -52,7 +52,10 @@ def _patch_status(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _fake_build_status(*, now: Any = None) -> dict[str, Any]:
         return _FAKE_STATUS
 
+    # app.py's legacy /status and the dashboard route each hold their own
+    # reference to build_status — patch both binding sites.
     monkeypatch.setattr(api_app, "build_status", _fake_build_status)
+    monkeypatch.setattr(dashboard_route.status_q, "build_status", _fake_build_status)
 
 
 def test_status_shape(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -77,7 +80,22 @@ def test_status_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_index_renders_html(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_status_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """/api/v1/status returns the same shape as legacy /status."""
+    _patch_status(monkeypatch)
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/status")
+    assert resp.status_code == 200
+    assert set(resp.json()) == {
+        "generated_at",
+        "sources",
+        "stale_sources",
+        "counts",
+        "recent_recommendations",
+    }
+
+
+def test_dashboard_renders_ported_sections(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_status(monkeypatch)
     client = TestClient(build_api())
     resp = client.get("/")
@@ -85,8 +103,14 @@ def test_index_renders_html(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "text/html" in resp.headers["content-type"]
     html = resp.text
     assert "gamer" in html
+    assert "Counts" in html
+    assert "Sources" in html
+    assert "Recent recommendations" in html
     assert "Hades" in html
     assert "STALE" in html  # the stale rss source is badged
+    # No external asset URLs — everything self-hosted under /static (§2, §9).
+    assert "unpkg.com" not in html
+    assert "/static/app.css" in html
 
 
 @pytest.mark.integration

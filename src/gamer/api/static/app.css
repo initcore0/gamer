@@ -1,0 +1,216 @@
+/*
+ * gamer UI stylesheet — hand-rolled, no framework (UI_PLAN.md §2, §6).
+ * Reproduces the original status-page look (system-ui, centered column,
+ * tabular-nums tables, muted grays, stale-row highlight) and adds CSS
+ * variables + a prefers-color-scheme dark theme. Kept small (< 10 kB).
+ */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #777777;
+  --border: #e2e2e2;
+  --accent: #2563eb;
+  --stale-bg: #fff4f4;
+  --stale-fg: #b00020;
+  --badge-bg: #f0f0f0;
+  --badge-fg: #444444;
+  --max-width: 960px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #14161a;
+    --fg: #e6e6e6;
+    --muted: #9aa0a6;
+    --border: #2a2e35;
+    --accent: #6ea8fe;
+    --stale-bg: #3a1d20;
+    --stale-fg: #ff8a8a;
+    --badge-bg: #242830;
+    --badge-fg: #c8ccd2;
+  }
+}
+
+/* Explicit theme override wins over the media query (future toggle support). */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #777777;
+  --border: #e2e2e2;
+  --accent: #2563eb;
+  --stale-bg: #fff4f4;
+  --stale-fg: #b00020;
+  --badge-bg: #f0f0f0;
+  --badge-fg: #444444;
+}
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --fg: #e6e6e6;
+  --muted: #9aa0a6;
+  --border: #2a2e35;
+  --accent: #6ea8fe;
+  --stale-bg: #3a1d20;
+  --stale-fg: #ff8a8a;
+  --badge-bg: #242830;
+  --badge-fg: #c8ccd2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  max-width: var(--max-width);
+  margin: 0 auto;
+  padding: 0 1rem 3rem;
+  color: var(--fg);
+  background: var(--bg);
+  line-height: 1.5;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+h1 {
+  font-size: 1.4rem;
+}
+h2 {
+  font-size: 1.05rem;
+  margin-top: 1.8rem;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+/* ── Header / nav ─────────────────────────────────────────────────────────── */
+
+.site-header {
+  display: flex;
+  align-items: baseline;
+  gap: 1.2rem;
+  flex-wrap: wrap;
+  margin: 1.6rem 0 0.4rem;
+  padding-bottom: 0.8rem;
+  border-bottom: 1px solid var(--border);
+}
+.site-header .brand {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--fg);
+}
+.site-nav {
+  display: flex;
+  gap: 1rem;
+}
+.site-nav a.active {
+  font-weight: 600;
+  text-decoration: underline;
+}
+
+/* ── Tables ───────────────────────────────────────────────────────────────── */
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin-top: 0.4rem;
+}
+th,
+td {
+  text-align: left;
+  padding: 0.35rem 0.6rem;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+tr.stale td {
+  background: var(--stale-bg);
+}
+tr.stale .badge-stale {
+  color: var(--stale-fg);
+  font-weight: 600;
+}
+
+/* ── Badges & chips ───────────────────────────────────────────────────────── */
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.45rem;
+  border-radius: 0.6rem;
+  background: var(--badge-bg);
+  color: var(--badge-fg);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Search box ───────────────────────────────────────────────────────────── */
+
+.search {
+  width: 100%;
+  max-width: 28rem;
+  padding: 0.45rem 0.6rem;
+  margin: 0.6rem 0 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 0.95rem;
+}
+.search:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ── Load-more ────────────────────────────────────────────────────────────── */
+
+.load-more {
+  display: inline-block;
+  margin-top: 1rem;
+  padding: 0.4rem 0.9rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  background: var(--badge-bg);
+  color: var(--fg);
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.load-more:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+/* ── Mobile ───────────────────────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  table,
+  thead,
+  tbody,
+  th,
+  td,
+  tr {
+    display: block;
+  }
+  thead {
+    display: none;
+  }
+  tr {
+    border-bottom: 1px solid var(--border);
+    padding: 0.4rem 0;
+  }
+  td {
+    border: none;
+    padding: 0.15rem 0.6rem;
+  }
+}
