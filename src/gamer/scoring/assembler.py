@@ -29,6 +29,7 @@ DEFAULT_WEIGHTS: dict[str, float] = {
     "watchability": 0.15,
     "freshness": 0.10,
     "fit": 0.15,
+    "genre_sub": 0.20,
 }
 
 
@@ -69,6 +70,7 @@ class Assembler:
             name=candidate.name,
             score=round(total, 4),
             breakdown=breakdown,
+            genres=list(candidate.genres),
         )
 
     async def rank(

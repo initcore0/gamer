@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from gamer.db import session_scope
 from gamer.db.models import Game, Recommendation, StreamerPref
 from gamer.logging import get_logger
+from gamer.notify.digest import apply_genre_quota
 from gamer.scoring.assembler import DEFAULT_WEIGHTS, Assembler
 from gamer.scoring.base import (
     Candidate,
@@ -108,6 +109,7 @@ async def build_context(
 
     liked = list(prefs.liked_genres or []) if prefs else []
     blocked = list(prefs.blocked_genres or []) if prefs else []
+    subscribed = list(prefs.subscribed_genres or []) if prefs else []
     muted = set(prefs.muted_game_ids or []) if prefs else set()
     embedding: list[float] | None = None
     if prefs is not None and prefs.profile_embedding is not None:
@@ -130,6 +132,7 @@ async def build_context(
         now=now,
         liked_genres=liked,
         blocked_genres=blocked,
+        subscribed_genres=subscribed,
         muted_game_ids=muted,
         last_recommended=last_recommended,
         profile_embedding=embedding,
@@ -155,19 +158,34 @@ async def recommend(
     *,
     now: datetime | None = None,
     persist: bool = True,
+    subscribed_quota: int = 0,
 ) -> list[ScoredRecommendation]:
     """Score tracked games and return the top ``limit`` recommendations.
 
-    Persists the ranked results as ``Recommendation`` rows unless ``persist`` is
-    False. ``now`` is injectable (defaults to the current UTC instant) so the same
-    path drives the backtest harness.
+    Persists the *final displayed* results as ``Recommendation`` rows unless
+    ``persist`` is False. ``now`` is injectable (defaults to the current UTC
+    instant) so the same path drives the backtest harness.
+
+    ``subscribed_quota`` (M7): when > 0, ranks *all* candidates, then applies the
+    pure :func:`~gamer.notify.digest.apply_genre_quota` over the full ranked pool so
+    at least ``min(subscribed_quota, available)`` of the returned picks come from
+    subscribed genres — promoting subscribed-genre games from below the top-``limit``
+    cut when needed. Only the final ``limit`` picks are persisted (so promotion never
+    pollutes the cooldown history with games that weren't shown). ``subscribed_quota
+    == 0`` keeps the pre-M7 behavior byte-identical.
     """
     now = now or datetime.now(UTC)
     assembler = build_assembler()
     async with session_scope() as session:
         candidates = await load_candidates(session)
         ctx = await build_context(session, now=now, key=key)
-        ranked = await assembler.rank(candidates, ctx, limit=limit)
+        if subscribed_quota > 0:
+            full = await assembler.rank(candidates, ctx, limit=None)
+            ranked = apply_genre_quota(
+                full, ctx.subscribed_genres, limit=limit, slots=subscribed_quota
+            )
+        else:
+            ranked = await assembler.rank(candidates, ctx, limit=limit)
         if persist and ranked:
             await _persist(session, ranked)
     log.info("recommend", key=key, limit=limit, returned=len(ranked), persisted=persist)

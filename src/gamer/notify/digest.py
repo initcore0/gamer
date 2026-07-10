@@ -16,6 +16,66 @@ from gamer.signals.movers import Mover
 _STEAM_STORE = "https://store.steampowered.com/app/"
 
 
+def _is_subscribed(rec: ScoredRecommendation, subscribed: set[str]) -> bool:
+    """True when any of the rec's genres matches a subscribed genre (case-insensitive)."""
+    return any(g.lower() in subscribed for g in rec.genres)
+
+
+def apply_genre_quota(
+    ranked: list[ScoredRecommendation],
+    subscribed: list[str],
+    limit: int,
+    slots: int = 3,
+) -> list[ScoredRecommendation]:
+    """Reserve digest slots for subscribed-genre picks (GENRE_SUBS_PLAN.md, M7).
+
+    Pure. Given the *full* ranked list (best-first), returns the final display list
+    of length ``min(limit, len(ranked))`` in which at least
+    ``min(slots, available_subscribed)`` entries are subscribed-genre games — where
+    ``available_subscribed`` is how many subscribed-genre picks exist anywhere in
+    ``ranked``.
+
+    When the natural top-``limit`` cut already meets the quota, it is returned
+    unchanged. Otherwise the highest-scoring subscribed-genre picks from *below* the
+    cut are promoted, each replacing the lowest-scoring non-subscribed pick in the
+    cut. The result is re-sorted by score so relative score order is preserved.
+
+    Byte-identical to a plain ``ranked[:limit]`` when ``subscribed`` is empty, when
+    no candidate matches, when the cut already satisfies the quota, or when
+    ``slots <= 0``.
+    """
+    cut = ranked[:limit]
+    if not subscribed or slots <= 0 or not cut:
+        return cut
+
+    subs = {g.lower() for g in subscribed}
+    in_cut_subscribed = [r for r in cut if _is_subscribed(r, subs)]
+
+    # How many subscribed picks exist across the entire ranked pool caps the target.
+    total_subscribed = sum(1 for r in ranked if _is_subscribed(r, subs))
+    target = min(slots, total_subscribed, limit)
+    if len(in_cut_subscribed) >= target:
+        return cut
+
+    need = target - len(in_cut_subscribed)
+    # Subscribed picks below the cut, best-first (ranked is already best-first).
+    below_subscribed = [r for r in ranked[limit:] if _is_subscribed(r, subs)]
+    promote = below_subscribed[:need]
+    if not promote:
+        return cut
+
+    # Drop the lowest-scoring non-subscribed picks in the cut to make room, keeping
+    # every subscribed pick already in the cut.
+    non_subscribed_in_cut = [r for r in cut if not _is_subscribed(r, subs)]
+    # Lowest score last in `cut` order; drop from the tail (lowest score first).
+    drop = set(id(r) for r in sorted(non_subscribed_in_cut, key=lambda r: r.score)[: len(promote)])
+    kept = [r for r in cut if id(r) not in drop]
+
+    result = kept + promote
+    result.sort(key=lambda r: r.score, reverse=True)
+    return result
+
+
 def _fmt_mover(rank: int, m: Mover) -> str:
     arrow = "📈" if m.delta >= 0 else "📉"
     pct = f" ({m.pct:+.0f}%)" if m.pct is not None else ""

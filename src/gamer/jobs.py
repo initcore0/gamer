@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 
+from gamer.catalog.genre_tracking import track_subscribed_genres
 from gamer.config import Settings, get_settings
 from gamer.enrichment.jobs import enrich_news_once
 from gamer.enrichment.llm import LLMSummarizer
@@ -71,7 +72,9 @@ async def run_digest_once() -> None:
         return
     settings = get_settings()
 
-    recs = await recommend(limit=10)
+    # Reserve up to 3 digest slots for subscribed-genre picks (M7). With no
+    # subscriptions the quota is a no-op and this path is byte-identical to before.
+    recs = await recommend(limit=10, subscribed_quota=3)
     if recs:
         # Optional LLM blurb (M4). Fail-open: returns None when disabled/unreachable,
         # and the digest then renders exactly as it did before the LLM existed.
@@ -143,6 +146,19 @@ async def run_rollups_refresh_once() -> None:
     await refresh_rollups()
 
 
+async def run_genre_track_once() -> None:
+    """Auto-track the top games of each subscribed genre (GENRE_SUBS_PLAN.md, M7).
+
+    Degrade-don't-crash: exceptions are logged and swallowed so a bad run never
+    takes down the scheduler.
+    """
+    try:
+        newly = await track_subscribed_genres()
+        log.info("genre_track_done", newly_tracked=newly)
+    except Exception:  # a scheduled job must never crash the loop
+        log.exception("genre_track_failed")
+
+
 def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
     """Register source-poll jobs and the daily digest with the scheduler."""
     for name, factory in REGISTRY.items():
@@ -167,3 +183,7 @@ def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
 
     # Signal rollups (1d buckets) so game-detail charts read cheap history beyond 7d.
     scheduler.add_interval_job(run_rollups_refresh_once, seconds=3600, name="rollups:refresh")
+
+    # Genre subscriptions: auto-track the top games of each subscribed genre so
+    # niche-genre coverage stays fresh as the appdetails crawler fills genres.
+    scheduler.add_interval_job(run_genre_track_once, seconds=3600, name="genre:track")
