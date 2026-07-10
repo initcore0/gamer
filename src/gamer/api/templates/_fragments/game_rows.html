@@ -13,7 +13,7 @@
 {% set ncols = 8 %}
 {% for row in page.rows %}
   <tr>
-    <td>{{ row.name }}</td>
+    <td><a href="/games/{{ row.id }}">{{ row.name }}</a></td>
     <td><span class="badge">{{ row.platform }}</span></td>
     <td>{{ row.genres | join(", ") }}</td>
     <td class="num">{% if row.current_players is not none %}{{ "{:,.0f}".format(row.current_players) }}{% else %}—{% endif %}</td>

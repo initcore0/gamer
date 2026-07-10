@@ -31,7 +31,8 @@ from gamer.notify.digest import build_digest, build_scored_digest
 from gamer.scheduler import Scheduler
 from gamer.scoring.service import recommend
 from gamer.signals.movers import top_movers
-from gamer.signals.stats import refresh_game_stats
+from gamer.signals.rollups import refresh_rollups
+from gamer.signals.stats import embed_missing_game_embeddings, refresh_game_stats
 from gamer.sources import REGISTRY
 from gamer.sources.runner import run_source
 from gamer.sources.sink import DbEventSink
@@ -123,8 +124,15 @@ async def run_health_check_once() -> None:
 
 
 async def run_stats_refresh_once() -> None:
-    """Recompute the precomputed catalog-row stats (UI_PLAN.md §5.4)."""
+    """Recompute catalog-row stats + backfill game embeddings (UI_PLAN.md §5.4, §3.3)."""
     await refresh_game_stats()
+    # Similar-games backfill: embed a bounded batch of games missing a vector.
+    await embed_missing_game_embeddings()
+
+
+async def run_rollups_refresh_once() -> None:
+    """Refresh the 1d signal rollups charts read beyond 7 days (UI_PLAN.md §5.5)."""
+    await refresh_rollups()
 
 
 def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
@@ -148,3 +156,6 @@ def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
 
     # Precomputed catalog-row stats so /games never aggregates signals per row.
     scheduler.add_interval_job(run_stats_refresh_once, seconds=15 * 60, name="stats:refresh")
+
+    # Signal rollups (1d buckets) so game-detail charts read cheap history beyond 7d.
+    scheduler.add_interval_job(run_rollups_refresh_once, seconds=3600, name="rollups:refresh")

@@ -1,0 +1,149 @@
+{#
+  Game detail page (UI_PLAN.md §3.3, UI-M3). Header + charts + score panel +
+  news + similar games. Charts are driven by /static/charts.js (CSP: no inline
+  scripts) reading data-* attributes; the series data comes from
+  /api/v1/games/{id}/series. Autoescape is ON; nothing here uses |safe.
+#}
+{% extends "base.html" %}
+{% set active = 'games' %}
+{% block title %}gamer — {{ game.name }}{% endblock %}
+{% block head_extra %}
+  <script src="/static/uPlot.iife.min.js" defer></script>
+  <script src="/static/charts.js" defer></script>
+{% endblock %}
+{% block content %}
+  <article class="game-detail">
+    <header class="detail-header">
+      <h1>{{ game.name }}</h1>
+      <div class="detail-meta">
+        <span class="badge">{{ game.platform }}</span>
+        {% if game.genres %}<span class="genres">{{ game.genres | join(", ") }}</span>{% endif %}
+        <span class="price">
+          {%- if game.is_free -%}Free
+          {%- elif game.price_cents is not none -%}${{ "%.2f"|format(game.price_cents / 100) }}
+          {%- else -%}—{%- endif -%}
+        </span>
+        {% if game.release_date %}<span class="release">Released {{ game.release_date.date() }}</span>{% endif %}
+        {% if game.tracked %}<span class="badge tracked">tracked</span>{% endif %}
+        {% if store_url %}<a class="store-link" href="{{ store_url }}" rel="noopener" target="_blank">Steam store ↗</a>{% endif %}
+      </div>
+    </header>
+
+    {# ── Charts ─────────────────────────────────────────────────────────── #}
+    <section class="charts">
+      <h2>Players</h2>
+      <div class="chart-group" data-chart-group>
+        <div class="range-buttons">
+          <a href="#" data-range="24h">24h</a>
+          <a href="#" data-range="7d" class="active">7d</a>
+          <a href="#" data-range="30d">30d</a>
+          <a href="#" data-range="all">all</a>
+        </div>
+        <div class="chart" data-game="{{ game.id }}" data-metric="players"
+             data-label="Players" data-range="7d">Loading chart…</div>
+      </div>
+
+      {% if game.twitch_viewers is not none %}
+      <h2>Twitch viewers</h2>
+      <div class="chart-group" data-chart-group>
+        <div class="range-buttons">
+          <a href="#" data-range="24h">24h</a>
+          <a href="#" data-range="7d" class="active">7d</a>
+          <a href="#" data-range="30d">30d</a>
+          <a href="#" data-range="all">all</a>
+        </div>
+        <div class="chart" data-game="{{ game.id }}" data-metric="twitch"
+             data-label="Twitch viewers" data-range="7d">Loading chart…</div>
+      </div>
+      {% endif %}
+
+      {% if game.review_count is not none %}
+      <h2>Reviews</h2>
+      <div class="chart-group" data-chart-group>
+        <div class="range-buttons">
+          <a href="#" data-range="24h">24h</a>
+          <a href="#" data-range="7d" class="active">7d</a>
+          <a href="#" data-range="30d">30d</a>
+          <a href="#" data-range="all">all</a>
+        </div>
+        <div class="chart" data-game="{{ game.id }}" data-metric="reviews"
+             data-label="Reviews" data-range="7d">Loading chart…</div>
+      </div>
+      {% endif %}
+    </section>
+
+    {# ── Score breakdown ────────────────────────────────────────────────── #}
+    {% if breakdown %}
+    <section class="score-panel">
+      <h2>Why this game <span class="score">score {{ "%.2f"|format(breakdown.score) }}</span></h2>
+      <ul class="bars">
+        {% for bar in bars %}
+        <li class="bar-row">
+          <span class="bar-key">{{ bar.key }}</span>
+          <span class="bar-track">
+            <span class="bar-fill {% if bar.positive %}pos{% else %}neg{% endif %}"
+                  style="width: {{ "%.1f"|format(bar.width_pct) }}%"></span>
+          </span>
+          <span class="bar-value {% if bar.positive %}up{% else %}down{% endif %}">
+            {{ "%+.3f"|format(bar.weighted) }}
+          </span>
+          <span class="bar-reason">{{ bar.reason }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% if penalties %}
+      <ul class="penalties">
+        {% for p in penalties %}
+        <li>
+          <span class="penalty-key">penalty: {{ p.key }}</span>
+          {% if p.multiplier is not none %}<span class="penalty-mult">×{{ "%.2f"|format(p.multiplier) }}</span>{% endif %}
+          <span class="penalty-reason">{{ p.reason }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
+    {% endif %}
+
+    {# ── News ───────────────────────────────────────────────────────────── #}
+    {% if news %}
+    <section class="news">
+      <h2>News</h2>
+      {% for card in news %}
+      <div class="news-card">
+        <a class="news-title" href="{{ card.url or '#' }}" rel="noopener" target="_blank">{{ card.title }}</a>
+        <div class="news-meta">
+          <span class="news-source">{{ card.source }}</span>
+          <span class="news-date">{{ card.published_at.date() }}</span>
+        </div>
+        {% if card.similar_count > 0 %}
+        <details class="news-similar">
+          <summary>+{{ card.similar_count }} similar</summary>
+          <ul>
+            {% for s in card.similar %}
+            <li><a href="{{ s.url or '#' }}" rel="noopener" target="_blank">{{ s.title }}</a>
+              <span class="news-source">{{ s.source }}</span></li>
+            {% endfor %}
+          </ul>
+        </details>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </section>
+    {% endif %}
+
+    {# ── Similar games ──────────────────────────────────────────────────── #}
+    {% if similar %}
+    <section class="similar-games">
+      <h2>Similar games</h2>
+      <div class="chips">
+        {% for s in similar %}
+        <a class="chip" href="/games/{{ s.id }}">
+          {{ s.name }} <span class="badge">{{ s.platform }}</span>
+        </a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </article>
+{% endblock %}

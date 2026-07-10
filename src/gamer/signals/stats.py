@@ -37,6 +37,8 @@ MAX_SPARK_POINTS = 21
 _DELTA_LAG = timedelta(hours=24)
 # Bounded per-batch game count so a full refresh never loads everything at once.
 BATCH_SIZE = 500
+# Games embedded per stats run for the similar-games backfill (UI_PLAN.md §3.3).
+EMBED_BATCH = 200
 
 
 @dataclass(frozen=True, slots=True)
@@ -248,3 +250,46 @@ async def refresh_game_stats(*, now: datetime | None = None) -> int:
 
     log.info("stats_refresh_done", games=total)
     return total
+
+
+# ── Similar-games embedding backfill (integration-marked) ────────────────────
+
+
+async def embed_missing_game_embeddings(*, limit: int = EMBED_BATCH) -> int:
+    """Embed up to ``limit`` games missing ``games.embedding`` (UI_PLAN.md §3.3).
+
+    The similar-games nearest-neighbour search compares a target game's vector
+    against the HNSW index over ``games.embedding``; this backfills that column
+    incrementally (≤ ``limit`` games per stats run) from ``game_text`` via
+    :func:`~gamer.enrichment.embeddings.get_embedder` — which falls back to the
+    deterministic hash embedder when the ML extra is absent, so it works in CI.
+
+    Returns the number of games embedded. Talks to the database → integration-only.
+    """
+    from sqlalchemy import select, update
+
+    from gamer.db import session_scope
+    from gamer.db.models import Game
+    from gamer.enrichment.embeddings import game_text, get_embedder
+
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(Game.id, Game.name, Game.genres)
+                .where(Game.embedding.is_(None))
+                .order_by(Game.id)
+                .limit(limit)
+            )
+        ).all()
+        if not rows:
+            log.info("game_embed_noop", reason="no games missing embedding")
+            return 0
+
+        embedder = get_embedder()
+        texts = [game_text(str(name), list(genres or [])) for _gid, name, genres in rows]
+        vectors = embedder.embed(texts)
+        for (gid, _name, _genres), vector in zip(rows, vectors, strict=True):
+            await session.execute(update(Game).where(Game.id == gid).values(embedding=vector))
+
+    log.info("game_embed_done", games=len(rows))
+    return len(rows)

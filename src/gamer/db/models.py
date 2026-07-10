@@ -83,6 +83,10 @@ class Game(Base, TimestampMixin):
     details_fetched_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Whether we actively poll this game's player count (top-N + explicit tracks).
     tracked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Representative vector (name+genres) for similar-games nearest-neighbour
+    # search (UI_PLAN.md §3.3, §8 UI-M3). Backfilled by the ``stats:refresh`` job;
+    # nullable until that job embeds the game. HNSW cosine index in migration 0004.
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
 
     tags: Mapped[list[GameTag]] = relationship(back_populates="game", cascade="all, delete-orphan")
 

@@ -1,0 +1,14 @@
+{#
+  Styled 404 for an unknown game id (UI_PLAN.md §3.3). Full page (extends base),
+  returned with a 404 status by the route.
+#}
+{% extends "base.html" %}
+{% set active = 'games' %}
+{% block title %}gamer — not found{% endblock %}
+{% block content %}
+  <section class="not-found">
+    <h1>Game not found</h1>
+    <p>No game with id <code>{{ game_id }}</code> exists in the catalog.</p>
+    <p><a href="/games">← Back to the catalog</a></p>
+  </section>
+{% endblock %}
