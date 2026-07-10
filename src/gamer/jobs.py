@@ -41,8 +41,11 @@ log = get_logger("jobs")
 
 # Per-run soft caps so a single poll stays polite and bounded.
 _SOURCE_RUN_LIMITS = {
-    "steam_api": 1000,  # catalog pages / player samples per run
-    "steam_store": 100,  # appdetails is stingy — small batches
+    # The GetAppList catalog endpoint is a single cheap call (not the rate-limited
+    # appdetails one), so we can fill the catalog faster — ~5k/run fills Steam's
+    # ~250k appids in a couple of days instead of ~10.
+    "steam_api": 5000,  # catalog pages / player samples per run
+    "steam_store": 100,  # appdetails is stingy — small batches, stays conservative
 }
 
 
