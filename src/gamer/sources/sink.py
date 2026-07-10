@@ -130,14 +130,23 @@ class DbEventSink:
         if app_id is None:
             return 0
         p = event.payload
+        # Insert-time fallback for a brand-new stub (satisfies NOT NULL name); an
+        # event without a name must never *overwrite* an existing name, so the
+        # fallback is only used for the initial INSERT, not the ON CONFLICT update.
         values: dict[str, Any] = {
             "platform": platform,
             "platform_app_id": app_id,
             "name": p.get("name") or f"app {app_id}",
         }
         # Only overwrite optional details when the event actually carries them
-        # (the catalog-sync GAME event only knows the name).
-        update_cols: dict[str, Any] = {"name": values["name"], "updated_at": datetime.now(UTC)}
+        # (the catalog-sync GAME event only knows the name; the top-charts tracking
+        # event knows only ``tracked`` and has no name at all).
+        update_cols: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+        if p.get("name"):
+            update_cols["name"] = p["name"]
+        if "tracked" in p:
+            values["tracked"] = bool(p["tracked"])
+            update_cols["tracked"] = values["tracked"]
         if "genres" in p:
             values["genres"] = p["genres"] or []
             update_cols["genres"] = values["genres"]
