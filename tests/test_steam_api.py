@@ -423,3 +423,80 @@ async def test_limit_honoured_across_phases() -> None:
     # Each charted app emits 2 events (GAME + PLAYER_COUNT); limit=3 stops mid-charts.
     events = await _collect(source, FetchContext(limit=3))
     assert len(events) == 3
+
+
+@respx.mock
+async def test_small_limit_still_reaches_signal_phases_keyless() -> None:
+    """Regression: a still-syncing catalog must not starve the signal phases.
+
+    With a small ``ctx.limit`` and a catalog large enough to swallow it whole, the
+    top-charts (tracked-flagging) and per-app player-count phases must still run —
+    they emit *before* the catalog, which only gets the leftover budget.
+    """
+    # A large keyless catalog — on the old ordering this alone ate the whole limit.
+    apps = [{"appid": i, "name": f"g{i}"} for i in range(1, 51)]
+    respx.get(_APP_LIST_URL).mock(
+        return_value=httpx.Response(200, json={"applist": {"apps": apps}})
+    )
+    respx.get(_MOST_PLAYED_URL).mock(
+        return_value=httpx.Response(
+            200, json=_ranks({"rank": 1, "appid": 730, "concurrent_in_game": 5000})
+        )
+    )
+    respx.get(_PLAYER_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"response": {"player_count": 42, "result": 1}})
+    )
+    # 730 is charted (skipped by the per-app phase); 999 is tracked-only.
+    source = _source([730, 999])
+    ctx = FetchContext(limit=5)
+    events = await _collect(source, ctx)
+
+    assert len(events) == 5
+    # Signal phases ran despite the huge catalog: a tracking GAME event (730), two
+    # player-count samples (charts 730 + per-app 999)...
+    tracking = [e for e in events if e.kind is EventKind.GAME and e.payload == {"tracked": True}]
+    assert [e.platform_app_id for e in tracking] == [730]
+    pc = [e for e in events if e.kind is EventKind.PLAYER_COUNT]
+    assert {e.platform_app_id for e in pc} == {730, 999}
+    # ...and the catalog got only the leftover budget (5 - 1 tracking - 2 samples = 2).
+    catalog = [e for e in events if e.kind is EventKind.GAME and "name" in e.payload]
+    assert [e.natural_key for e in catalog] == ["1", "2"]
+
+
+@respx.mock
+async def test_small_limit_still_reaches_signal_phases_paginated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same regression on the key-authenticated paginated catalog path."""
+    _set_key(monkeypatch)
+    respx.get(_STORE_APP_LIST_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_store_page(
+                [{"appid": i, "name": f"g{i}"} for i in range(1, 51)],
+                last_appid=50,
+                have_more=True,
+            ),
+        )
+    )
+    respx.get(_MOST_PLAYED_URL).mock(
+        return_value=httpx.Response(
+            200, json=_ranks({"rank": 1, "appid": 730, "concurrent_in_game": 5000})
+        )
+    )
+    respx.get(_PLAYER_COUNT_URL).mock(
+        return_value=httpx.Response(200, json={"response": {"player_count": 42, "result": 1}})
+    )
+    source = _source([730, 999])
+    ctx = FetchContext(limit=5)
+    events = await _collect(source, ctx)
+
+    assert len(events) == 5
+    tracking = [e for e in events if e.kind is EventKind.GAME and e.payload == {"tracked": True}]
+    assert [e.platform_app_id for e in tracking] == [730]
+    pc = [e for e in events if e.kind is EventKind.PLAYER_COUNT]
+    assert {e.platform_app_id for e in pc} == {730, 999}
+    catalog = [e for e in events if e.kind is EventKind.GAME and "name" in e.payload]
+    # Catalog gets the leftover budget and its cursor advances only that far.
+    assert [e.natural_key for e in catalog] == ["1", "2"]
+    assert ctx.cursor["last_appid"] == 2

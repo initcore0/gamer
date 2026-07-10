@@ -108,24 +108,26 @@ class SteamApiSource:
         return provided
 
     async def fetch(self, ctx: FetchContext) -> AsyncIterator[RawEvent]:
-        """Yield GAME events (catalog sync), then top-charts events (player-count
-        samples + tracking GAME events for the top ~100), then per-app PLAYER_COUNT
-        events for tracked games.
+        """Yield the signal phases first — top-charts events (player-count samples +
+        tracking GAME events for the top ~100) then per-app PLAYER_COUNT events for
+        tracked games — and only then the catalog sync (GAME events).
 
-        Honours ``ctx.limit`` and mutates ``ctx.cursor`` in place so a huge catalog
-        resumes across runs. Never raises on expected upstream failures.
+        The signal phases are small (~100 + tracked-count events) and matter more
+        than raw catalog fill, so they run first and the catalog gets whatever budget
+        remains. This is deliberate: the full catalog is ~250k appids and takes weeks
+        to walk at the per-run page size, and if it ran first it would consume the
+        entire per-run ``ctx.limit`` every run, permanently starving the signal
+        phases (they'd never execute while the catalog is still syncing).
+
+        Honours ``ctx.limit`` as an overall soft cap and mutates ``ctx.cursor`` in
+        place so a huge catalog resumes across runs. Never raises on expected
+        upstream failures.
         """
         emitted = 0
         # Appids already sampled from the top-charts phase this run — the per-app
         # phase skips them so we never poll the same appid twice in one run.
         charted: set[int] = set()
         async with self._client() as client:
-            async for event in self._fetch_app_list(client, ctx, emitted):
-                emitted += 1
-                yield event
-                if ctx.limit is not None and emitted >= ctx.limit:
-                    return
-
             async for event in self._fetch_most_played(client, charted):
                 emitted += 1
                 yield event
@@ -133,6 +135,15 @@ class SteamApiSource:
                     return
 
             async for event in self._fetch_player_counts(client, skip=charted):
+                emitted += 1
+                yield event
+                if ctx.limit is not None and emitted >= ctx.limit:
+                    return
+
+            # Catalog sync last: it receives the budget the signal phases left
+            # unspent (via ``already_emitted``), so a still-syncing catalog can no
+            # longer starve the phases above.
+            async for event in self._fetch_app_list(client, ctx, emitted):
                 emitted += 1
                 yield event
                 if ctx.limit is not None and emitted >= ctx.limit:
