@@ -18,12 +18,14 @@ Nothing is auto-started in tests — :func:`build_api` returns a bare app;
 
 from __future__ import annotations
 
+from typing import Any
+
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.staticfiles import StaticFiles
 
 from gamer.api.queries.status import StatusPayload, build_status
-from gamer.api.routes import dashboard, games
+from gamer.api.routes import dashboard, game_detail, games
 from gamer.api.templating import STATIC_DIR
 from gamer.config import Settings, get_settings
 from gamer.logging import get_logger
@@ -32,6 +34,11 @@ __all__ = ["build_api", "build_status", "run_api"]
 
 log = get_logger("api")
 
+# CSP for HTML pages (UI_PLAN.md §2, §9): self-only, no external assets, no inline
+# scripts (charts run from /static/charts.js reading data-* attrs). ``data:`` is
+# allowed for images so inline sparkline/data-URI assets keep working.
+_CSP = "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'"
+
 
 def build_api(settings: Settings | None = None) -> FastAPI:
     """Construct the read-only web-UI FastAPI app. Does not start a server."""
@@ -39,6 +46,15 @@ def build_api(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="gamer", version="0.2.0", docs_url=None, redoc_url=None)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    @app.middleware("http")
+    async def _csp_header(request: Request, call_next: Any) -> Response:
+        response: Response = await call_next(request)
+        # Only HTML documents need the CSP; JSON/static responses are unaffected.
+        content_type = response.headers.get("content-type", "")
+        if content_type.startswith("text/html"):
+            response.headers["Content-Security-Policy"] = _CSP
+        return response
 
     @app.get("/health")
     async def health() -> dict[str, str]:  # DB-free liveness probe.
@@ -52,6 +68,7 @@ def build_api(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(dashboard.router)
     app.include_router(games.router)
+    app.include_router(game_detail.router)
     return app
 
 

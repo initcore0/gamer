@@ -316,3 +316,147 @@ td.down {
     color: #f87171;
   }
 }
+
+/* ── Game detail (UI_PLAN.md §3.3, UI-M3) ─────────────────────────────────── */
+.game-detail {
+  max-width: var(--max-width);
+  margin: 0 auto;
+}
+.detail-header h1 {
+  margin-bottom: 0.25rem;
+}
+.detail-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  color: var(--muted);
+}
+.detail-meta .price {
+  font-variant-numeric: tabular-nums;
+}
+.badge.tracked {
+  color: var(--accent);
+}
+.store-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+.charts h2,
+.score-panel h2,
+.news h2,
+.similar-games h2 {
+  margin-top: 1.5rem;
+}
+.chart-group {
+  margin-bottom: 1rem;
+}
+.range-buttons {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.4rem;
+}
+.range-buttons a {
+  padding: 0.15rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 0.85rem;
+}
+.range-buttons a.active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.chart {
+  width: 100%;
+  min-height: 240px;
+  color: var(--muted);
+}
+/* Score breakdown bars. */
+.score-panel .score {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 0.9rem;
+}
+.bars {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.bar-row {
+  display: grid;
+  grid-template-columns: 8rem 1fr 5rem;
+  grid-template-areas: "key track value" "reason reason reason";
+  gap: 0.3rem 0.6rem;
+  align-items: center;
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.bar-key { grid-area: key; font-weight: 600; }
+.bar-track {
+  grid-area: track;
+  background: var(--badge-bg);
+  border-radius: 0.3rem;
+  height: 0.8rem;
+  overflow: hidden;
+}
+.bar-fill { display: block; height: 100%; }
+.bar-fill.pos { background: var(--accent); }
+.bar-fill.neg { background: #dc2626; }
+.bar-value {
+  grid-area: value;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.bar-reason { grid-area: reason; color: var(--muted); font-size: 0.85rem; }
+.penalties {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+.penalties .penalty-mult {
+  font-variant-numeric: tabular-nums;
+  color: var(--stale-fg);
+}
+/* News cards. */
+.news-card {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--border);
+}
+.news-title {
+  font-weight: 600;
+  color: var(--fg);
+  text-decoration: none;
+}
+.news-meta {
+  display: flex;
+  gap: 0.6rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.news-similar summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+/* Similar-games chips. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.chip {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  color: var(--fg);
+  text-decoration: none;
+}
+.chip:hover { border-color: var(--accent); }
+.not-found {
+  max-width: var(--max-width);
+  margin: 2rem auto;
+  text-align: center;
+}
