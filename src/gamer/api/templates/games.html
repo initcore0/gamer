@@ -1,0 +1,32 @@
+{#
+  Catalog list page (UI_PLAN.md §8 UI-M1, §4.2 search seed).
+  Full page; the rows table body is swapped by HTMX search / load-more via the
+  _fragments/game_rows.html partial. `page` is a queries.games.GamePage.
+#}
+{% extends "base.html" %}
+{% set active = 'games' %}
+{% block title %}gamer — games{% endblock %}
+{% block content %}
+  <h1>Games</h1>
+
+  <input
+    type="search"
+    name="q"
+    class="search"
+    placeholder="Search games…"
+    value="{{ q or '' }}"
+    autocomplete="off"
+    hx-get="/games"
+    hx-trigger="keyup changed delay:250ms"
+    hx-target="#game-rows"
+    hx-swap="innerHTML">
+
+  <table>
+    <thead>
+      <tr><th>Name</th><th>Platform</th><th>Genres</th><th>Tracked</th></tr>
+    </thead>
+    <tbody id="game-rows">
+      {% include "_fragments/game_rows.html" %}
+    </tbody>
+  </table>
+{% endblock %}

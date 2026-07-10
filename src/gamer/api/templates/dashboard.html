@@ -1,0 +1,56 @@
+{#
+  Dashboard — port of the original status page (UI_PLAN.md §8 UI-M1).
+  Same information as the old f-string HTML, now via Jinja2 autoescaping.
+  `status` is a queries.status.StatusPayload.
+#}
+{% extends "base.html" %}
+{% set active = 'dashboard' %}
+{% block title %}gamer — status{% endblock %}
+{% block content %}
+  <h1>build log status</h1>
+  <p class="muted">Generated at {{ status.generated_at }}</p>
+
+  <h2>Counts</h2>
+  <table>
+    <tbody>
+      <tr><td>Games</td><td>{{ "{:,}".format(status.counts.games) }}</td></tr>
+      <tr><td>News items</td><td>{{ "{:,}".format(status.counts.news) }}</td></tr>
+      <tr><td>Signal samples</td><td>{{ "{:,}".format(status.counts.signals) }}</td></tr>
+      <tr><td>Recommendations</td><td>{{ "{:,}".format(status.counts.recommendations) }}</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Sources</h2>
+  <table>
+    <thead>
+      <tr><th>Source</th><th>Last run</th><th>Last success</th><th></th></tr>
+    </thead>
+    <tbody>
+      {% for s in status.sources %}
+        {% set is_stale = s.source in stale_sources %}
+        <tr class="{% if is_stale %}stale{% endif %}">
+          <td>{{ s.source }}</td>
+          <td>{{ s.last_run_at or "—" }}</td>
+          <td>{{ s.last_success_at or "—" }}</td>
+          <td>{% if is_stale %}<span class="badge-stale">⚠️ STALE</span>{% else %}ok{% endif %}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4">No sources have run yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>Recent recommendations</h2>
+  <table>
+    <thead>
+      <tr><th>Game</th><th>Score</th></tr>
+    </thead>
+    <tbody>
+      {% for r in status.recent_recommendations %}
+        <tr><td>{{ r.name }}</td><td>{{ r.score }}</td></tr>
+      {% else %}
+        <tr><td colspan="2">No recommendations yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock %}

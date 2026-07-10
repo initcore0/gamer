@@ -1,0 +1,34 @@
+{#
+  HTMX fragment: catalog table rows + a "load more" control (UI_PLAN.md §4).
+  Returned on its own for HX-Request search/pagination, and included by
+  games.html for the full page. Renders `page` (queries.games.GamePage) and `q`.
+
+  Load-more is a <tr> that replaces itself (outerHTML) with the next page's
+  fragment, so clicking it appends rows and re-arms the button until exhausted.
+  It is omitted entirely when there is no next page.
+#}
+{% for row in page.rows %}
+  <tr>
+    <td>{{ row.name }}</td>
+    <td><span class="badge">{{ row.platform }}</span></td>
+    <td>{{ row.genres | join(", ") }}</td>
+    <td>{% if row.tracked %}✓{% endif %}</td>
+  </tr>
+{% else %}
+  {% if not page.next_cursor %}
+    <tr><td colspan="4">No games found.</td></tr>
+  {% endif %}
+{% endfor %}
+{% if page.next_cursor %}
+  <tr id="load-more-row">
+    <td colspan="4">
+      <a class="load-more"
+         href="#"
+         hx-get="/games?cursor={{ page.next_cursor | urlencode }}{% if q %}&q={{ q | urlencode }}{% endif %}"
+         hx-target="#load-more-row"
+         hx-swap="outerHTML">
+        Load more
+      </a>
+    </td>
+  </tr>
+{% endif %}

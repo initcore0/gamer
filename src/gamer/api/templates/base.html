@@ -1,0 +1,27 @@
+{#
+  Base layout for the web UI (UI_PLAN.md §4). Header nav + shared assets.
+  All assets are self-hosted under /static — no CDN/external URLs (§2, §9 CSP).
+  Autoescape is ON everywhere; never pipe user data through |safe.
+#}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}gamer{% endblock %}</title>
+  <link rel="stylesheet" href="/static/uPlot.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/htmx.min.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <span class="brand">🎮 gamer</span>
+    <nav class="site-nav">
+      <a href="/" class="{% if active == 'dashboard' %}active{% endif %}">Dashboard</a>
+      <a href="/games" class="{% if active == 'games' %}active{% endif %}">Games</a>
+    </nav>
+  </header>
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
