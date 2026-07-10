@@ -17,11 +17,15 @@ this stays unit-testable without a live Telegram connection.
 
 from __future__ import annotations
 
+import contextlib
 import difflib
+import hashlib
+from dataclasses import dataclass
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
 
 from gamer.catalog.genre_tracking import known_genres, track_subscribed_genres
@@ -52,6 +56,7 @@ def help_text() -> str:
         "• /untrack &lt;game&gt; — stop polling a game's player count\n"
         "• /subscribe &lt;genre&gt; — always cover a genre (auto-tracks + boosts it)\n"
         "• /unsubscribe &lt;genre&gt; — stop covering a genre\n"
+        "• /genres — tap buttons to subscribe/unsubscribe genres\n"
         "• /prefs — show your genres, mutes, and digest setting\n"
         "• /digest on|off — toggle the daily group digest\n"
         "• /help — this message\n"
@@ -251,17 +256,19 @@ def _no_match_reply(query: str, suggestions: list[str]) -> str:
     return f"No genre matching “{query}”."
 
 
-@router.message(Command("subscribe"))
-async def cmd_subscribe(message: Message, command: CommandObject) -> None:
-    query = (command.args or "").strip()
-    if not query:
-        await message.answer("Usage: <code>/subscribe &lt;genre&gt;</code>", parse_mode="HTML")
-        return
-    canonical, suggestions = resolve_genre(query, await known_genres())
-    if canonical is None:
-        await message.answer(_no_match_reply(query, suggestions), parse_mode="HTML")
-        return
+async def _toggle_subscription(genre_canonical: str) -> tuple[bool, int]:
+    """Toggle a canonical genre in the streamer's ``subscribed_genres``.
 
+    Flips membership case-insensitively, storing the canonical casing. On a
+    *subscribe* it immediately runs :func:`track_subscribed_genres` for that genre
+    (coverage starts now, not at the next hourly tick); on an *unsubscribe* nothing
+    is un-tracked (consistent with the never-untrack design).
+
+    Returns ``(subscribed_now, tracked_count)`` where ``tracked_count`` is the
+    number of games newly tracked (always ``0`` on an unsubscribe). Shared by
+    ``/subscribe``, ``/unsubscribe`` and the ``/genres`` button callback.
+    """
+    lowered = genre_canonical.lower()
     async with session_scope() as session:
         prefs = (
             await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
@@ -270,12 +277,45 @@ async def cmd_subscribe(message: Message, command: CommandObject) -> None:
             prefs = StreamerPref(key=_PREF_KEY)
             session.add(prefs)
         subs = list(prefs.subscribed_genres or [])
-        if not any(s.lower() == canonical.lower() for s in subs):
-            subs.append(canonical)
+        already = any(s.lower() == lowered for s in subs)
+        if already:
+            prefs.subscribed_genres = [s for s in subs if s.lower() != lowered]
+            subscribed_now = False
+        else:
+            subs.append(genre_canonical)
             prefs.subscribed_genres = subs
+            subscribed_now = True
 
-    # Kick off coverage now instead of waiting for the hourly tick.
-    tracked = await track_subscribed_genres([canonical])
+    tracked = await track_subscribed_genres([genre_canonical]) if subscribed_now else 0
+    return subscribed_now, tracked
+
+
+@router.message(Command("subscribe"))
+async def cmd_subscribe(message: Message, command: CommandObject) -> None:
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer(
+            "Usage: <code>/subscribe &lt;genre&gt;</code> — or use /genres for buttons.",
+            parse_mode="HTML",
+        )
+        return
+    canonical, suggestions = resolve_genre(query, await known_genres())
+    if canonical is None:
+        await message.answer(_no_match_reply(query, suggestions), parse_mode="HTML")
+        return
+
+    # /subscribe is idempotently additive: ensure membership, then track. Only
+    # toggle when not already subscribed so a repeat /subscribe doesn't remove it.
+    async with session_scope() as session:
+        prefs = (
+            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
+        ).scalar_one_or_none()
+        subs = list(prefs.subscribed_genres or []) if prefs else []
+        already = any(s.lower() == canonical.lower() for s in subs)
+    if already:
+        tracked = await track_subscribed_genres([canonical])
+    else:
+        _, tracked = await _toggle_subscription(canonical)
     await message.answer(
         f"🧩 Subscribed to <b>{canonical}</b> — tracking {tracked} games in this genre.",
         parse_mode="HTML",
@@ -375,3 +415,219 @@ async def on_feedback(callback: CallbackQuery) -> None:
         session.add(Feedback(rec_id=rec_id, verdict=verdict))
     log.info("feedback_recorded", rec_id=rec_id, verdict=verdict.value)
     await callback.answer({"up": "👍 Noted!", "down": "👎 Got it.", "played": "🎮 Nice!"}[verdict])
+
+
+# ── /genres — tappable genre-subscription panel (M7 UX) ───────────────────────
+
+#: Max genre buttons shown per page (nav row is added on top when more exist).
+GENRES_PER_PAGE = 16
+#: Genre buttons per keyboard row.
+GENRES_PER_ROW = 2
+
+
+def genre_digest(genre: str) -> str:
+    """First 12 hex chars of sha256(genre.lower()) — a stable short id for a genre.
+
+    Used in callback_data instead of the raw (possibly long/unicode) genre name so
+    the payload stays well under Telegram's 64-byte limit.
+    """
+    return hashlib.sha256(genre.lower().encode("utf-8")).hexdigest()[:12]
+
+
+def paginate(
+    genres: list[str], page: int, per_page: int = GENRES_PER_PAGE
+) -> tuple[list[str], int]:
+    """Return ``(items_on_page, total_pages)`` for ``genres`` at 0-based ``page``.
+
+    Pure. ``page`` is clamped to ``[0, total_pages - 1]``. An empty list yields
+    ``([], 1)`` (one empty page) so callers never divide by zero.
+    """
+    total_pages = max(1, (len(genres) + per_page - 1) // per_page)
+    page = max(0, min(page, total_pages - 1))
+    start = page * per_page
+    return genres[start : start + per_page], total_pages
+
+
+def build_genres_keyboard(
+    genres: list[str], subscribed: set[str], page: int
+) -> InlineKeyboardMarkup | None:
+    """Build the genre-subscription keyboard for one page.
+
+    ``genres`` are sorted case-insensitively; subscribed ones render as
+    ``"✅ Puzzle"``. Buttons are laid out :data:`GENRES_PER_ROW` per row, with a
+    nav row (``◀️`` / ``page x/y`` / ``▶️``) appended when there is more than one
+    page. Returns ``None`` for an empty catalog (no keyboard at all).
+
+    ``subscribed`` is a set of subscribed genre names, matched case-insensitively.
+    """
+    if not genres:
+        return None
+    ordered = sorted(genres, key=str.lower)
+    sub_lower = {s.lower() for s in subscribed}
+    items, total_pages = paginate(ordered, page)
+    # paginate clamps; recover the effective page for the nav label/data.
+    eff_page = max(0, min(page, total_pages - 1))
+
+    rows: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for genre in items:
+        mark = "✅ " if genre.lower() in sub_lower else ""
+        row.append(
+            InlineKeyboardButton(
+                text=f"{mark}{genre}",
+                callback_data=f"genre:t:{genre_digest(genre)}:{eff_page}",
+            )
+        )
+        if len(row) == GENRES_PER_ROW:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+
+    if total_pages > 1:
+        nav: list[InlineKeyboardButton] = []
+        if eff_page > 0:
+            nav.append(InlineKeyboardButton(text="◀️", callback_data=f"genre:p:{eff_page - 1}"))
+        nav.append(
+            InlineKeyboardButton(
+                text=f"page {eff_page + 1}/{total_pages}", callback_data="genre:noop"
+            )
+        )
+        if eff_page < total_pages - 1:
+            nav.append(InlineKeyboardButton(text="▶️", callback_data=f"genre:p:{eff_page + 1}"))
+        rows.append(nav)
+
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+@dataclass(frozen=True)
+class GenreAction:
+    """A parsed ``genre:`` callback. ``kind`` is ``toggle``, ``page`` or ``noop``.
+
+    ``digest`` is set only for ``toggle``; ``page`` is set for ``toggle`` and
+    ``page`` (0 for ``noop``).
+    """
+
+    kind: str
+    digest: str | None
+    page: int
+
+
+def parse_genre_action(data: str) -> GenreAction | None:
+    """Parse a ``genre:`` callback payload → :class:`GenreAction`, else ``None``.
+
+    Grammar:
+      * ``genre:t:<digest>:<page>`` — toggle a genre (digest = 12 hex chars)
+      * ``genre:p:<page>``          — navigate to a page
+      * ``genre:noop``              — page indicator, does nothing
+
+    Returns ``None`` for anything malformed, tampered, or out of range (negative
+    page, non-hex/wrong-length digest, garbage) — the caller answers gracefully.
+    """
+    parts = data.split(":")
+    if not parts or parts[0] != "genre":
+        return None
+    kind = parts[1] if len(parts) > 1 else ""
+    if kind == "noop":
+        return GenreAction("noop", None, 0) if len(parts) == 2 else None
+    if kind == "p":
+        if len(parts) != 3:
+            return None
+        try:
+            page = int(parts[2])
+        except ValueError:
+            return None
+        return GenreAction("page", None, page) if page >= 0 else None
+    if kind == "t":
+        if len(parts) != 4:
+            return None
+        digest = parts[2]
+        if len(digest) != 12 or not all(c in "0123456789abcdef" for c in digest):
+            return None
+        try:
+            page = int(parts[3])
+        except ValueError:
+            return None
+        return GenreAction("toggle", digest, page) if page >= 0 else None
+    return None
+
+
+async def _subscribed_set() -> set[str]:
+    """The streamer's current subscribed genres as a set (empty when no prefs)."""
+    prefs = await _get_prefs()
+    return set(prefs.subscribed_genres or [])
+
+
+@router.message(Command("genres"))
+async def cmd_genres(message: Message) -> None:
+    genres = await known_genres()
+    keyboard = build_genres_keyboard(genres, await _subscribed_set(), 0)
+    if keyboard is None:
+        await message.answer("No genres in the catalog yet — check back once games are indexed.")
+        return
+    await message.answer("🧩 Tap a genre to subscribe/unsubscribe:", reply_markup=keyboard)
+
+
+async def _rerender_genres(callback: CallbackQuery, page: int) -> None:
+    """Rebuild the genre keyboard for ``page`` and edit the message markup in place.
+
+    Swallows the aiogram "message is not modified" edge (double-tap / same markup).
+    """
+    genres = await known_genres()
+    keyboard = build_genres_keyboard(genres, await _subscribed_set(), page)
+    message = callback.message
+    # message may be None or an InaccessibleMessage (too old to edit) — both lack a
+    # usable edit target. Guard on the method rather than the concrete type so tests
+    # can pass a lightweight stand-in.
+    edit = getattr(message, "edit_reply_markup", None)
+    if edit is None or keyboard is None:
+        return
+    try:
+        await edit(reply_markup=keyboard)
+    except TelegramBadRequest as exc:
+        if "message is not modified" not in (exc.message or ""):
+            raise
+
+
+@router.callback_query(F.data.startswith("genre:"))
+async def on_genre(callback: CallbackQuery) -> None:
+    action = parse_genre_action(callback.data or "")
+    if action is None:
+        await callback.answer("Unrecognized action.")
+        return
+
+    try:
+        if action.kind == "noop":
+            await callback.answer()
+            return
+
+        if action.kind == "page":
+            await _rerender_genres(callback, action.page)
+            await callback.answer()
+            return
+
+        # Toggle: resolve digest → canonical genre over the live catalog.
+        genres = await known_genres()
+        canonical = next((g for g in genres if genre_digest(g) == action.digest), None)
+        if canonical is None:
+            await callback.answer("That genre is gone.")
+            await _rerender_genres(callback, action.page)
+            return
+
+        subscribed_now, tracked = await _toggle_subscription(canonical)
+        if subscribed_now:
+            await callback.answer(f"🧩 Subscribed to {canonical} — tracking {tracked} games.")
+        else:
+            await callback.answer(f"Unsubscribed from {canonical}.")
+        await _rerender_genres(callback, action.page)
+    except TelegramBadRequest as exc:
+        # e.g. editing a >48h-old panel or an inaccessible message. The tap must
+        # still be answered or the client shows an endless spinner; suppress a
+        # possible double-answer (the toggle path answers before re-rendering).
+        log.warning("genre_callback_edit_failed", error=exc.message)
+        with contextlib.suppress(TelegramAPIError):
+            await callback.answer("That panel is stale — send /genres again.")
+    except Exception as exc:  # degrade, don't crash: DB error etc.
+        log.warning("genre_callback_failed", error=str(exc))
+        with contextlib.suppress(TelegramAPIError):
+            await callback.answer("Something went wrong — try again.")
