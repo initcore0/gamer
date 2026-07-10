@@ -9,6 +9,7 @@ its own features from the DB keyed off ``candidate.game_id`` and normalizing to
 from __future__ import annotations
 
 from gamer.scoring.components.fit import FitComponent
+from gamer.scoring.components.genre_sub import GenreSubComponent
 from gamer.scoring.components.signals import (
     FreshnessComponent,
     HypeComponent,
@@ -19,6 +20,7 @@ from gamer.scoring.components.watchability import WatchabilityComponent
 __all__ = [
     "FitComponent",
     "FreshnessComponent",
+    "GenreSubComponent",
     "HypeComponent",
     "MomentumComponent",
     "WatchabilityComponent",

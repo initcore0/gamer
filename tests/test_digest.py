@@ -3,9 +3,25 @@ from __future__ import annotations
 from datetime import date
 
 from gamer.notify.base import Channel
-from gamer.notify.digest import build_digest, build_scored_digest
+from gamer.notify.digest import apply_genre_quota, build_digest, build_scored_digest
 from gamer.scoring.base import ScoredRecommendation
 from gamer.signals.movers import Mover
+
+
+def test_digest_without_subscriptions_is_byte_identical() -> None:
+    """No subscriptions → the quota is a no-op, so the digest rendered from the
+    quota'd list is byte-for-byte the digest rendered from the plain top-N cut."""
+    ranked = [
+        ScoredRecommendation(game_id=i, name=f"G{i}", score=1.0 - i * 0.1, genres=["RPG"])
+        for i in range(10)
+    ]
+    quota_applied = apply_genre_quota(ranked, subscribed=[], limit=5)
+    plain_cut = ranked[:5]
+    assert quota_applied == plain_cut
+    a = build_scored_digest(quota_applied, for_day=date(2026, 7, 9))
+    b = build_scored_digest(plain_cut, for_day=date(2026, 7, 9))
+    assert a.text == b.text
+    assert a.dedup_key == b.dedup_key
 
 
 def test_digest_with_movers_is_deterministic() -> None:

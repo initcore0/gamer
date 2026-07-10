@@ -46,6 +46,8 @@ class ScoringContext:
     now: datetime
     liked_genres: list[str] = field(default_factory=list)
     blocked_genres: list[str] = field(default_factory=list)
+    #: genres the streamer subscribed to (hard boost via the ``genre_sub`` component).
+    subscribed_genres: list[str] = field(default_factory=list)
     muted_game_ids: set[int] = field(default_factory=set)
     #: game_id -> last time we recommended/streamed it (for cooldown penalty).
     last_recommended: dict[int, datetime] = field(default_factory=dict)
@@ -106,6 +108,8 @@ class ScoredRecommendation:
     score: float
     #: component key -> {weight, value, weighted, reason, detail} and penalties.
     breakdown: dict[str, Any] = field(default_factory=dict)
+    #: candidate genres carried through for the digest genre quota (additive; M7).
+    genres: list[str] = field(default_factory=list)
 
     def why(self) -> str:
         """Render a compact human explanation from the breakdown."""

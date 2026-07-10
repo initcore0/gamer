@@ -50,6 +50,7 @@ def _call_returns_list(factory: Any) -> list[ScoreComponent]:
 _SIGNALS = "gamer.scoring.components.signals"
 _FIT = "gamer.scoring.components.fit"
 _WATCH = "gamer.scoring.components.watchability"
+_GENRE_SUB = "gamer.scoring.components.genre_sub"
 
 _PROVIDERS: tuple[_Provider, ...] = (
     # signals.py is expected to expose a builder returning momentum/hype/freshness.
@@ -61,6 +62,8 @@ _PROVIDERS: tuple[_Provider, ...] = (
     _Provider(module=_WATCH, attr="WatchabilityComponent", build=_instantiate_each),
     # fit.py is expected to expose FitComponent.
     _Provider(module=_FIT, attr="FitComponent", build=_instantiate_each),
+    # genre_sub.py (subscribed-genre hard boost) — M7.
+    _Provider(module=_GENRE_SUB, attr="GenreSubComponent", build=_instantiate_each),
 )
 
 

@@ -261,6 +261,12 @@ class StreamerPref(Base, TimestampMixin):
     key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default="default")
     liked_genres: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     blocked_genres: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
+    # Genres the streamer has *subscribed* to (M7): a hard "always cover this" set,
+    # distinct from ``liked_genres`` (soft taste). Drives auto-tracking, the
+    # ``genre_sub`` score component, and the digest quota. Server-default ``[]``.
+    subscribed_genres: Mapped[list[str]] = mapped_column(
+        JSONB, nullable=False, default=list, server_default="[]"
+    )
     muted_game_ids: Mapped[list[int]] = mapped_column(JSONB, nullable=False, default=list)
     digest_enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Taste vector, updated from feedback; nullable until first computed.
