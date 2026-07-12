@@ -132,9 +132,24 @@ class UISettings(BaseModel):
     per-game deep link ``{public_base_url}/games/{id}`` to each pick so a bot
     message lands on the game page. Empty (the default) disables deep links, and
     digests are then byte-identical to before this feature.
+
+    ``cors_origins`` is the allowlist of browser origins permitted to call the
+    JSON API cross-origin (``GAMER_UI__CORS_ORIGINS``, comma-separated in the env
+    var, split by the before-validator below). Empty (the default) = same-origin
+    only, so no CORS middleware is wired and prod behaves exactly as before. The
+    Vite dev server proxies ``/api`` on its own origin, so this only matters when
+    the React build is served from a different origin than the API.
     """
 
     public_base_url: str = ""
+    cors_origins: list[str] = Field(default_factory=list)
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [item.strip() for item in v.split(",") if item.strip()]
+        return v
 
 
 class DiscordSettings(BaseModel):
