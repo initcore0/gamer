@@ -115,11 +115,14 @@ async def build_context(
     if prefs is not None and prefs.profile_embedding is not None:
         embedding = list(prefs.profile_embedding)
 
-    # last_recommended: most recent recommendation timestamp per game (<= now).
+    # last_recommended: most recent recommendation timestamp per game (<= now),
+    # scoped to this profile (multi-user): user A's recent picks must not damp
+    # user B's cooldown. Legacy rows carry ``pref_key='default'``.
     rec_rows = (
         await session.execute(
             select(Recommendation.game_id, Recommendation.created_at)
             .where(Recommendation.created_at <= now)
+            .where(Recommendation.pref_key == key)
             .order_by(Recommendation.game_id, Recommendation.created_at.desc())
         )
     ).all()
@@ -139,12 +142,15 @@ async def build_context(
     )
 
 
-async def _persist(session: AsyncSession, ranked: Sequence[ScoredRecommendation]) -> None:
-    """Persist ranked results as ``Recommendation`` rows (unsent)."""
+async def _persist(
+    session: AsyncSession, ranked: Sequence[ScoredRecommendation], *, key: str
+) -> None:
+    """Persist ranked results as ``Recommendation`` rows (unsent), owned by ``key``."""
     for r in ranked:
         session.add(
             Recommendation(
                 game_id=r.game_id,
+                pref_key=key,
                 score=r.score,
                 breakdown=r.breakdown,
                 sent_at=None,
@@ -187,6 +193,6 @@ async def recommend(
         else:
             ranked = await assembler.rank(candidates, ctx, limit=limit)
         if persist and ranked:
-            await _persist(session, ranked)
+            await _persist(session, ranked, key=key)
     log.info("recommend", key=key, limit=limit, returned=len(ranked), persisted=persist)
     return ranked

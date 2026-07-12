@@ -72,13 +72,17 @@ def build_profile_embedding(liked_game_embeddings: list[list[float]]) -> list[fl
 
 async def compute_profile_embedding(
     *,
+    key: str = "default",
     embedder: Embedder | None = None,
 ) -> list[float] | None:
-    """Read the games the streamer 👍'd / played and build their taste vector.
+    """Read the games profile ``key`` 👍'd / played and build its taste vector.
 
     Joins ``Feedback`` (verdict UP/PLAYED) → ``Recommendation`` → ``Game`` and
-    averages each game's embedding (name + genres). Talks to the database →
-    integration-only. Returns ``None`` when there is no positive feedback yet.
+    averages each game's embedding (name + genres). Scoped per profile
+    (multi-user): only feedback on recommendations *owned by* ``key`` (via
+    ``Recommendation.pref_key``) contributes, so each user's taste is learned from
+    their own thumbs-up alone. Talks to the database → integration-only. Returns
+    ``None`` when that profile has no positive feedback yet.
     """
     from sqlalchemy import select
 
@@ -91,6 +95,7 @@ async def compute_profile_embedding(
             select(Game.name, Game.genres)
             .join(Recommendation, Recommendation.game_id == Game.id)
             .join(Feedback, Feedback.rec_id == Recommendation.id)
+            .where(Recommendation.pref_key == key)
             .where(Feedback.verdict.in_((FeedbackVerdict.UP, FeedbackVerdict.PLAYED)))
         )
         rows = (await session.execute(stmt)).all()
@@ -99,3 +104,37 @@ async def compute_profile_embedding(
         return None
     vectors = emb.embed([game_text(name, list(genres or [])) for name, genres in rows])
     return build_profile_embedding(vectors)
+
+
+async def update_profile_embedding(
+    *,
+    key: str = "default",
+    embedder: Embedder | None = None,
+) -> list[float] | None:
+    """Recompute profile ``key``'s taste vector from its feedback and persist it.
+
+    The feedback→fit loop, scoped per profile (multi-user): reads the games this
+    profile thumbed-up/played (:func:`compute_profile_embedding`) and writes the
+    averaged vector onto that profile's ``StreamerPref.profile_embedding``. A
+    no-op (leaving the row untouched) when the profile has no positive feedback
+    yet. Creates the prefs row on demand so a brand-new profile that gives
+    feedback gets a taste vector. Integration-only (talks to the DB). Returns the
+    new vector, or ``None`` when there was nothing to compute.
+    """
+    from sqlalchemy import select
+
+    from gamer.db.engine import session_scope
+    from gamer.db.models import StreamerPref
+
+    vector = await compute_profile_embedding(key=key, embedder=embedder)
+    if vector is None:
+        return None
+    async with session_scope() as session:
+        prefs = (
+            await session.execute(select(StreamerPref).where(StreamerPref.key == key))
+        ).scalar_one_or_none()
+        if prefs is None:
+            prefs = StreamerPref(key=key)
+            session.add(prefs)
+        prefs.profile_embedding = vector
+    return vector
