@@ -27,8 +27,11 @@ from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from gamer.bot.keys import pref_key_from_event
 from gamer.catalog.genre_tracking import known_genres, track_subscribed_genres
+from gamer.config import get_settings
 from gamer.db import session_scope
 from gamer.db.models import Feedback, FeedbackVerdict, Game, Recommendation, StreamerPref
 from gamer.logging import get_logger
@@ -40,7 +43,9 @@ log = get_logger("bot")
 
 router = Router(name="gamer")
 
-_PREF_KEY = "default"
+#: The legacy/global profile key that predates multi-user. Never deleted; new
+#: DM/group profiles matching the configured chat ids adopt (copy) its fields.
+LEGACY_KEY = "default"
 
 
 def help_text() -> str:
@@ -71,17 +76,96 @@ async def cmd_help(message: Message) -> None:
     await message.answer(help_text(), parse_mode="HTML")
 
 
-async def _get_prefs() -> StreamerPref:
+def _resolve_key(event: object) -> str:
+    """The caller's profile key, or the legacy key when the chat can't be read.
+
+    Falling back to :data:`LEGACY_KEY` (rather than raising) keeps a handler that
+    somehow lacks a chat context degrading to the legacy profile instead of
+    crashing — the pre-multiuser behavior.
+    """
+    return pref_key_from_event(event) or LEGACY_KEY
+
+
+def _label_for(message: Message) -> str | None:
+    """Human display name for a chat's profile: DM → the user's full name, group →
+    the chat title. ``None`` when neither is available (kept as a NULL label)."""
+    chat = message.chat
+    if chat.type == "private":
+        return message.from_user.full_name if message.from_user else None
+    return chat.title
+
+
+def _should_adopt_legacy(key: str) -> bool:
+    """Whether a newly-created profile ``key`` should seed itself from ``'default'``.
+
+    Only the operator's own DM and group (the configured ``dm_chat_id`` /
+    ``group_chat_id``) adopt the legacy profile's subscriptions/mutes, so the
+    current owner's puzzle-genre subscriptions survive the multi-user migration.
+    Everyone else starts blank. ``'default'`` never adopts itself.
+    """
+    if key == LEGACY_KEY:
+        return False
+    tg = get_settings().telegram
+    return key in {str(tg.dm_chat_id), str(tg.group_chat_id)} and key != "0"
+
+
+async def _get_prefs(key: str, *, label: str | None = None) -> StreamerPref:
+    """Load (creating on demand) the prefs row for ``key``, detached for reading.
+
+    On creation the row is seeded with ``label`` and, when ``key`` is the
+    operator's configured DM/group chat, the legacy ``'default'`` profile's fields
+    are copied in (legacy adoption) so the existing owner's subscriptions/mutes
+    carry over. The ``'default'`` row is never deleted or modified. The returned
+    row is expunged, so mutating it does *not* write back — use
+    :func:`_ensure_prefs` when you intend to change the profile.
+    """
     async with session_scope() as session:
-        row = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
-        ).scalar_one_or_none()
-        if row is None:
-            row = StreamerPref(key=_PREF_KEY)
-            session.add(row)
-            await session.flush()
+        row = await _ensure_prefs(session, key, label=label)
         session.expunge(row)
         return row
+
+
+def _copy_legacy_fields(legacy: StreamerPref, row: StreamerPref) -> None:
+    """Copy the adopted personalization fields from ``legacy`` onto ``row``.
+
+    Lists are deep-copied so the two rows never share a mutable object; the
+    profile embedding (a plain list or None) is copied likewise.
+    """
+    row.liked_genres = list(legacy.liked_genres or [])
+    row.blocked_genres = list(legacy.blocked_genres or [])
+    row.subscribed_genres = list(legacy.subscribed_genres or [])
+    row.muted_game_ids = list(legacy.muted_game_ids or [])
+    row.digest_enabled = legacy.digest_enabled
+    row.profile_embedding = (
+        list(legacy.profile_embedding) if legacy.profile_embedding is not None else None
+    )
+
+
+async def _ensure_prefs(
+    session: AsyncSession, key: str, *, label: str | None = None
+) -> StreamerPref:
+    """Load-or-create the prefs row for ``key`` *inside an open session*.
+
+    The mutating twin of :func:`_get_prefs`: returns a live (attached) row the
+    caller can modify within the same transaction. Applies the same legacy
+    adoption on first creation and backfills a missing ``label``.
+    """
+    row = (
+        await session.execute(select(StreamerPref).where(StreamerPref.key == key))
+    ).scalar_one_or_none()
+    if row is None:
+        row = StreamerPref(key=key, label=label)
+        if _should_adopt_legacy(key):
+            legacy = (
+                await session.execute(select(StreamerPref).where(StreamerPref.key == LEGACY_KEY))
+            ).scalar_one_or_none()
+            if legacy is not None:
+                _copy_legacy_fields(legacy, row)
+        session.add(row)
+        await session.flush()
+    elif label is not None and row.label is None:
+        row.label = label
+    return row
 
 
 def format_movers_reply(movers: list[Mover]) -> str:
@@ -125,7 +209,10 @@ def format_scored_reply(recs: list[ScoredRecommendation]) -> str:
 
 @router.message(Command("recommend"))
 async def cmd_recommend(message: Message) -> None:
-    recs = await score_recommend(limit=5)
+    # Ensure the caller has a profile (adopting the legacy one for the operator's
+    # own DM/group), then score against it.
+    await _get_prefs(_resolve_key(message), label=_label_for(message))
+    recs = await score_recommend(limit=5, key=_resolve_key(message))
     if recs:
         await message.answer(format_scored_reply(recs), parse_mode="HTML")
         return
@@ -140,6 +227,7 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
     if not query:
         await message.answer("Usage: <code>/why &lt;game name&gt;</code>", parse_mode="HTML")
         return
+    key = _resolve_key(message)
     async with session_scope() as session:
         game = (
             await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
@@ -147,14 +235,26 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
         if game is None:
             await message.answer(f"I don't have a game matching “{query}”.")
             return
+        # Prefer the caller's own latest rec for this game; fall back to any
+        # profile's rec so /why still explains a group-digest pick etc.
         rec = (
             await session.execute(
                 select(Recommendation)
                 .where(Recommendation.game_id == game.id)
+                .where(Recommendation.pref_key == key)
                 .order_by(Recommendation.created_at.desc())
                 .limit(1)
             )
         ).scalar_one_or_none()
+        if rec is None:
+            rec = (
+                await session.execute(
+                    select(Recommendation)
+                    .where(Recommendation.game_id == game.id)
+                    .order_by(Recommendation.created_at.desc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
     if rec is None or not rec.breakdown:
         await message.answer(
             f"No scored recommendation for <b>{game.name}</b> yet "
@@ -174,6 +274,8 @@ async def cmd_mute(message: Message, command: CommandObject) -> None:
     if not query:
         await message.answer("Usage: <code>/mute &lt;game name&gt;</code>", parse_mode="HTML")
         return
+    key = _resolve_key(message)
+    label = _label_for(message)
     async with session_scope() as session:
         game = (
             await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
@@ -181,12 +283,7 @@ async def cmd_mute(message: Message, command: CommandObject) -> None:
         if game is None:
             await message.answer(f"No game matching “{query}”.")
             return
-        prefs = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
-        ).scalar_one_or_none()
-        if prefs is None:
-            prefs = StreamerPref(key=_PREF_KEY)
-            session.add(prefs)
+        prefs = await _ensure_prefs(session, key, label=label)
         muted = set(prefs.muted_game_ids or [])
         muted.add(game.id)
         prefs.muted_game_ids = sorted(muted)
@@ -256,13 +353,17 @@ def _no_match_reply(query: str, suggestions: list[str]) -> str:
     return f"No genre matching “{query}”."
 
 
-async def _toggle_subscription(genre_canonical: str) -> tuple[bool, int]:
-    """Toggle a canonical genre in the streamer's ``subscribed_genres``.
+async def _toggle_subscription(
+    genre_canonical: str, key: str = LEGACY_KEY, *, label: str | None = None
+) -> tuple[bool, int]:
+    """Toggle a canonical genre in profile ``key``'s ``subscribed_genres``.
 
     Flips membership case-insensitively, storing the canonical casing. On a
     *subscribe* it immediately runs :func:`track_subscribed_genres` for that genre
     (coverage starts now, not at the next hourly tick); on an *unsubscribe* nothing
-    is un-tracked (consistent with the never-untrack design).
+    is un-tracked (consistent with the never-untrack design). Tracking is
+    catalog-global — subscribing anyone to a genre makes those games candidates
+    for every profile that also subscribes.
 
     Returns ``(subscribed_now, tracked_count)`` where ``tracked_count`` is the
     number of games newly tracked (always ``0`` on an unsubscribe). Shared by
@@ -270,12 +371,7 @@ async def _toggle_subscription(genre_canonical: str) -> tuple[bool, int]:
     """
     lowered = genre_canonical.lower()
     async with session_scope() as session:
-        prefs = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
-        ).scalar_one_or_none()
-        if prefs is None:
-            prefs = StreamerPref(key=_PREF_KEY)
-            session.add(prefs)
+        prefs = await _ensure_prefs(session, key, label=label)
         subs = list(prefs.subscribed_genres or [])
         already = any(s.lower() == lowered for s in subs)
         if already:
@@ -304,18 +400,20 @@ async def cmd_subscribe(message: Message, command: CommandObject) -> None:
         await message.answer(_no_match_reply(query, suggestions), parse_mode="HTML")
         return
 
+    key = _resolve_key(message)
+    label = _label_for(message)
     # /subscribe is idempotently additive: ensure membership, then track. Only
     # toggle when not already subscribed so a repeat /subscribe doesn't remove it.
     async with session_scope() as session:
         prefs = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
+            await session.execute(select(StreamerPref).where(StreamerPref.key == key))
         ).scalar_one_or_none()
         subs = list(prefs.subscribed_genres or []) if prefs else []
         already = any(s.lower() == canonical.lower() for s in subs)
     if already:
         tracked = await track_subscribed_genres([canonical])
     else:
-        _, tracked = await _toggle_subscription(canonical)
+        _, tracked = await _toggle_subscription(canonical, key, label=label)
     await message.answer(
         f"🧩 Subscribed to <b>{canonical}</b> — tracking {tracked} games in this genre.",
         parse_mode="HTML",
@@ -329,9 +427,10 @@ async def cmd_unsubscribe(message: Message, command: CommandObject) -> None:
         await message.answer("Usage: <code>/unsubscribe &lt;genre&gt;</code>", parse_mode="HTML")
         return
     lowered = query.lower()
+    key = _resolve_key(message)
     async with session_scope() as session:
         prefs = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
+            await session.execute(select(StreamerPref).where(StreamerPref.key == key))
         ).scalar_one_or_none()
         subs = list(prefs.subscribed_genres or []) if prefs else []
         match = next((s for s in subs if s.lower() == lowered), None)
@@ -347,7 +446,7 @@ async def cmd_unsubscribe(message: Message, command: CommandObject) -> None:
 
 @router.message(Command("prefs"))
 async def cmd_prefs(message: Message) -> None:
-    prefs = await _get_prefs()
+    prefs = await _get_prefs(_resolve_key(message), label=_label_for(message))
     liked = ", ".join(prefs.liked_genres) or "—"
     blocked = ", ".join(prefs.blocked_genres) or "—"
     subscribed = ", ".join(prefs.subscribed_genres) or "—"
@@ -369,15 +468,14 @@ async def cmd_digest(message: Message, command: CommandObject) -> None:
         await message.answer("Usage: <code>/digest on|off</code>", parse_mode="HTML")
         return
     enabled = arg == "on"
+    key = _resolve_key(message)
+    label = _label_for(message)
     async with session_scope() as session:
-        prefs = (
-            await session.execute(select(StreamerPref).where(StreamerPref.key == _PREF_KEY))
-        ).scalar_one_or_none()
-        if prefs is None:
-            prefs = StreamerPref(key=_PREF_KEY)
-            session.add(prefs)
+        prefs = await _ensure_prefs(session, key, label=label)
         prefs.digest_enabled = enabled
-    await message.answer(f"Group digest turned <b>{arg}</b>.", parse_mode="HTML")
+    # A DM toggles that user's personal digest; a group toggles the group digest.
+    kind = "group digest" if (message.chat.type != "private") else "digest"
+    await message.answer(f"Your {kind} was turned <b>{arg}</b>.", parse_mode="HTML")
 
 
 def parse_feedback_action(data: str) -> tuple[FeedbackVerdict, int] | None:
@@ -552,29 +650,33 @@ def parse_genre_action(data: str) -> GenreAction | None:
     return None
 
 
-async def _subscribed_set() -> set[str]:
-    """The streamer's current subscribed genres as a set (empty when no prefs)."""
-    prefs = await _get_prefs()
+async def _subscribed_set(key: str = LEGACY_KEY) -> set[str]:
+    """Profile ``key``'s current subscribed genres as a set (empty when no prefs)."""
+    prefs = await _get_prefs(key)
     return set(prefs.subscribed_genres or [])
 
 
 @router.message(Command("genres"))
 async def cmd_genres(message: Message) -> None:
+    key = _resolve_key(message)
+    # Ensure the caller's profile exists (adopting the legacy one for the operator),
+    # so the checkmarks reflect *their* subscriptions.
+    await _get_prefs(key, label=_label_for(message))
     genres = await known_genres()
-    keyboard = build_genres_keyboard(genres, await _subscribed_set(), 0)
+    keyboard = build_genres_keyboard(genres, await _subscribed_set(key), 0)
     if keyboard is None:
         await message.answer("No genres in the catalog yet — check back once games are indexed.")
         return
     await message.answer("🧩 Tap a genre to subscribe/unsubscribe:", reply_markup=keyboard)
 
 
-async def _rerender_genres(callback: CallbackQuery, page: int) -> None:
-    """Rebuild the genre keyboard for ``page`` and edit the message markup in place.
+async def _rerender_genres(callback: CallbackQuery, page: int, key: str) -> None:
+    """Rebuild profile ``key``'s genre keyboard for ``page`` and edit in place.
 
     Swallows the aiogram "message is not modified" edge (double-tap / same markup).
     """
     genres = await known_genres()
-    keyboard = build_genres_keyboard(genres, await _subscribed_set(), page)
+    keyboard = build_genres_keyboard(genres, await _subscribed_set(key), page)
     message = callback.message
     # message may be None or an InaccessibleMessage (too old to edit) — both lack a
     # usable edit target. Guard on the method rather than the concrete type so tests
@@ -596,13 +698,15 @@ async def on_genre(callback: CallbackQuery) -> None:
         await callback.answer("Unrecognized action.")
         return
 
+    key = _resolve_key(callback)
+    label = _label_for(callback.message) if isinstance(callback.message, Message) else None
     try:
         if action.kind == "noop":
             await callback.answer()
             return
 
         if action.kind == "page":
-            await _rerender_genres(callback, action.page)
+            await _rerender_genres(callback, action.page, key)
             await callback.answer()
             return
 
@@ -611,15 +715,15 @@ async def on_genre(callback: CallbackQuery) -> None:
         canonical = next((g for g in genres if genre_digest(g) == action.digest), None)
         if canonical is None:
             await callback.answer("That genre is gone.")
-            await _rerender_genres(callback, action.page)
+            await _rerender_genres(callback, action.page, key)
             return
 
-        subscribed_now, tracked = await _toggle_subscription(canonical)
+        subscribed_now, tracked = await _toggle_subscription(canonical, key, label=label)
         if subscribed_now:
             await callback.answer(f"🧩 Subscribed to {canonical} — tracking {tracked} games.")
         else:
             await callback.answer(f"Unsubscribed from {canonical}.")
-        await _rerender_genres(callback, action.page)
+        await _rerender_genres(callback, action.page, key)
     except TelegramBadRequest as exc:
         # e.g. editing a >48h-old panel or an inaccessible message. The tap must
         # still be answered or the client shows an endless spinner; suppress a

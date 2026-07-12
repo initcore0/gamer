@@ -66,6 +66,22 @@ def test_rss_feeds_csv_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().rss.feeds == ["https://a.com", "https://b.com"]
 
 
+def test_telegram_allowed_chat_ids_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key in list(__import__("os").environ):
+        if key.startswith("GAMER_"):
+            monkeypatch.delenv(key, raising=False)
+    get_settings.cache_clear()
+    # Empty by default => the bot is open to everyone.
+    assert Settings().telegram.allowed_chat_ids == []
+
+
+def test_telegram_allowed_chat_ids_csv_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # CSV of ints, tolerant of whitespace + a trailing comma; groups are negative.
+    monkeypatch.setenv("GAMER_TELEGRAM__ALLOWED_CHAT_IDS", " 111, -222 ,333,")
+    get_settings.cache_clear()
+    assert Settings().telegram.allowed_chat_ids == [111, -222, 333]
+
+
 def test_health_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GAMER_HEALTH__STALE_AFTER_HOURS", "12")
     get_settings.cache_clear()

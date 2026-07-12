@@ -43,6 +43,19 @@ class TelegramSettings(BaseSettings):
     group_chat_id: int = 0
     # UTC hour the daily digest fires (cron, so restarts don't drift it).
     digest_hour_utc: int = Field(default=16, ge=0, le=23)
+    # Optional allowlist of Telegram chat ids that may use the bot (multi-user).
+    # Comma-separated in the env var (GAMER_TELEGRAM__ALLOWED_CHAT_IDS=123,-456).
+    # Empty (the default) means the bot is open to everyone; when non-empty, the
+    # router's outer middleware politely refuses messages *and* callbacks from any
+    # chat not listed. NoDecode stops pydantic-settings JSON-parsing the CSV first.
+    allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+
+    @field_validator("allowed_chat_ids", mode="before")
+    @classmethod
+    def _split_csv(cls, v: object) -> object:
+        if isinstance(v, str):
+            return [int(item.strip()) for item in v.split(",") if item.strip()]
+        return v
 
 
 class TwitchSettings(BaseSettings):

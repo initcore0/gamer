@@ -9,6 +9,7 @@ from __future__ import annotations
 from aiogram import Bot, Dispatcher
 
 from gamer.bot.handlers import router
+from gamer.bot.middleware import AllowlistMiddleware
 from gamer.config import get_settings
 from gamer.logging import get_logger
 
@@ -17,6 +18,12 @@ log = get_logger("bot.app")
 
 def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
+    # Outer allowlist gate on messages *and* callbacks (multi-user). Empty
+    # allowlist (the default) passes everyone; a configured one refuses others.
+    allowed = frozenset(get_settings().telegram.allowed_chat_ids)
+    middleware = AllowlistMiddleware(allowed)
+    router.message.outer_middleware(middleware)
+    router.callback_query.outer_middleware(middleware)
     dp.include_router(router)
     return dp
 
