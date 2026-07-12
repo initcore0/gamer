@@ -59,6 +59,11 @@ _STREAMS_URL = f"{_HELIX_BASE}/streams"
 #: in-flight requests).
 _TOKEN_EXPIRY_SKEW_SECONDS = 60.0
 
+#: Max pages (of 100 streams each) summed per game when totalling viewers. Bounds
+#: the per-game API cost while capturing enough of a big game's long tail that the
+#: watchability signal isn't biased against the most-streamed games.
+_MAX_STREAM_PAGES = 5
+
 #: Resolves a Twitch game name to a Steam appid, or None. May be sync or async.
 AppidResolver = Callable[[str], int | None | Awaitable[int | None]]
 
@@ -219,24 +224,45 @@ class TwitchSource:
         return [g for g in games if isinstance(g, dict) and g.get("id")]
 
     async def _build_event(self, client: PoliteClient, game: dict[str, Any]) -> RawEvent | None:
-        """Sum live-stream viewers for one game → a TWITCH RawEvent (or None)."""
+        """Sum live-stream viewers for one game → a TWITCH RawEvent (or None).
+
+        Pages through up to :data:`_MAX_STREAM_PAGES` pages of 100 streams each and
+        sums their viewers. A single 100-stream page systematically undercounts the
+        most-streamed games (thousands of streams) while counting small games
+        exactly — which is exactly backwards for a watchability signal, since the
+        big games are the ones we most care about ranking. Bounded pages cap the
+        API cost per game.
+        """
         twitch_game_id = str(game.get("id"))
         game_name = str(game.get("name") or "")
 
-        try:
-            data = await client.get_json(
-                _STREAMS_URL, params={"game_id": twitch_game_id, "first": 100}
+        viewers = 0
+        cursor: str | None = None
+        for _page in range(_MAX_STREAM_PAGES):
+            params: dict[str, Any] = {"game_id": twitch_game_id, "first": 100}
+            if cursor:
+                params["after"] = cursor
+            try:
+                data = await client.get_json(_STREAMS_URL, params=params)
+            except _UPSTREAM_ERRORS as exc:
+                log.warning(
+                    "streams_fetch_failed",
+                    twitch_game_id=twitch_game_id,
+                    error=redact_secrets(f"{type(exc).__name__}: {exc}"),
+                )
+                # Partial pages already summed are still a better estimate than None,
+                # but the first-page failure means no data at all → skip this game.
+                if _page == 0:
+                    return None
+                break
+            streams = data.get("data") or []
+            viewers += sum(
+                int(s.get("viewer_count", 0) or 0) for s in streams if isinstance(s, dict)
             )
-        except _UPSTREAM_ERRORS as exc:
-            log.warning(
-                "streams_fetch_failed",
-                twitch_game_id=twitch_game_id,
-                error=redact_secrets(f"{type(exc).__name__}: {exc}"),
-            )
-            return None
-
-        streams = data.get("data") or []
-        viewers = sum(int(s.get("viewer_count", 0) or 0) for s in streams if isinstance(s, dict))
+            pagination = data.get("pagination") if isinstance(data, dict) else None
+            cursor = pagination.get("cursor") if isinstance(pagination, dict) else None
+            if not cursor or len(streams) < 100:
+                break
 
         now = datetime.now(UTC)
         hour = now.replace(minute=0, second=0, microsecond=0)

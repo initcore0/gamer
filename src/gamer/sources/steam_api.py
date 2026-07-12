@@ -406,15 +406,26 @@ class SteamApiSource:
                 params["key"] = api_key
             try:
                 data = await client.get_json(_PLAYER_COUNT_URL, params=params)
-            except _UPSTREAM_ERRORS as exc:
-                # 429/5xx (after retries) or timeout — log and stop, per contract.
-                # str(exc) can embed the request URL including the API key — redact.
+            except RetryableStatus as exc:
+                # 429/5xx survived all retries — real upstream backpressure. Stop the
+                # whole sweep so we don't hammer Steam; remaining appids get sampled
+                # next run. str(exc) can embed the API key in the URL — redact.
+                log.warning(
+                    "player_count_rate_limited",
+                    appid=appid,
+                    error=redact_secrets(f"{type(exc).__name__}: {exc}"),
+                )
+                return
+            except httpx.HTTPError as exc:
+                # A per-app error (timeout, connection reset, a single bad response):
+                # skip THIS appid and keep sampling the rest — one bad game must not
+                # starve every game after it in the sweep (the core popularity signal).
                 log.warning(
                     "player_count_fetch_failed",
                     appid=appid,
                     error=redact_secrets(f"{type(exc).__name__}: {exc}"),
                 )
-                return
+                continue
 
             response = data.get("response") or {}
             # result == 1 means success; anything else (app has no stats) is skipped.

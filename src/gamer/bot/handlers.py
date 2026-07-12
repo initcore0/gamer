@@ -21,12 +21,13 @@ import contextlib
 import difflib
 import hashlib
 from dataclasses import dataclass
+from html import escape
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from gamer.bot.keys import pref_key_from_event
@@ -86,6 +87,34 @@ def _resolve_key(event: object) -> str:
     return pref_key_from_event(event) or LEGACY_KEY
 
 
+async def _find_game(session: AsyncSession, query: str) -> Game | None:
+    """Resolve ``query`` to a single game, preferring the most specific match.
+
+    A bare ``ILIKE '%q%' LIMIT 1`` with no ordering returns an arbitrary row, so
+    ``/mute Portal`` could mute "Portal 2" while the exact title keeps being
+    recommended. Instead: an exact (case-insensitive) name wins; otherwise the
+    shortest matching name is chosen as a cheap "most specific" proxy ("Portal" <
+    "Portal 2" < "Portal with RTX"), tie-broken by id for determinism. Returns
+    ``None`` when nothing matches.
+    """
+    exact = (
+        (await session.execute(select(Game).where(func.lower(Game.name) == query.strip().lower())))
+        .scalars()
+        .first()
+    )
+    if exact is not None:
+        return exact
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return (
+        await session.execute(
+            select(Game)
+            .where(Game.name.ilike(f"%{escaped}%", escape="\\"))
+            .order_by(func.length(Game.name).asc(), Game.id.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 def _label_for(message: Message) -> str | None:
     """Human display name for a chat's profile: DM → the user's full name, group →
     the chat title. ``None`` when neither is available (kept as a NULL label)."""
@@ -142,17 +171,22 @@ def _copy_legacy_fields(legacy: StreamerPref, row: StreamerPref) -> None:
 
 
 async def _ensure_prefs(
-    session: AsyncSession, key: str, *, label: str | None = None
+    session: AsyncSession, key: str, *, label: str | None = None, for_update: bool = False
 ) -> StreamerPref:
     """Load-or-create the prefs row for ``key`` *inside an open session*.
 
     The mutating twin of :func:`_get_prefs`: returns a live (attached) row the
     caller can modify within the same transaction. Applies the same legacy
     adoption on first creation and backfills a missing ``label``.
+
+    ``for_update`` takes a row lock (``SELECT … FOR UPDATE``) so concurrent
+    read-modify-writes on the same profile serialize instead of clobbering each
+    other — e.g. two fast ``/genres`` taps in one aiogram polling batch.
     """
-    row = (
-        await session.execute(select(StreamerPref).where(StreamerPref.key == key))
-    ).scalar_one_or_none()
+    stmt = select(StreamerPref).where(StreamerPref.key == key)
+    if for_update:
+        stmt = stmt.with_for_update()
+    row = (await session.execute(stmt)).scalar_one_or_none()
     if row is None:
         row = StreamerPref(key=key, label=label)
         if _should_adopt_legacy(key):
@@ -199,11 +233,13 @@ def _top_reasons(breakdown: dict[str, object], n: int = 2) -> list[str]:
 
 
 def format_scored_reply(recs: list[ScoredRecommendation]) -> str:
+    # Names/reasons are Steam/data-sourced — escape so a "<"/"&" (e.g. a title like
+    # "Emily is Away <3") can't make Telegram reject the whole HTML message.
     lines = ["<b>Recommended for you:</b>"]
     for i, r in enumerate(recs, start=1):
-        lines.append(f"{i}. <b>{r.name}</b> — {r.score:.2f}")
+        lines.append(f"{i}. <b>{escape(r.name)}</b> — {r.score:.2f}")
         for reason in _top_reasons(r.breakdown):
-            lines.append(f"   • {reason}")
+            lines.append(f"   • {escape(reason)}")
     return "\n".join(lines)
 
 
@@ -229,9 +265,7 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
         return
     key = _resolve_key(message)
     async with session_scope() as session:
-        game = (
-            await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
-        ).scalar_one_or_none()
+        game = await _find_game(session, query)
         if game is None:
             await message.answer(f"I don't have a game matching “{query}”.")
             return
@@ -257,7 +291,7 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
             ).scalar_one_or_none()
     if rec is None or not rec.breakdown:
         await message.answer(
-            f"No scored recommendation for <b>{game.name}</b> yet "
+            f"No scored recommendation for <b>{escape(game.name)}</b> yet "
             f"(the scoring engine lands in M3).",
             parse_mode="HTML",
         )
@@ -265,7 +299,11 @@ async def cmd_why(message: Message, command: CommandObject) -> None:
     scored = ScoredRecommendation(
         game_id=game.id, name=game.name, score=rec.score, breakdown=rec.breakdown
     )
-    await message.answer(f"<b>Why {game.name}</b>\n{scored.why()}", parse_mode="HTML")
+    # why() is plain text carrying the (data-sourced) name + reasons; escape it
+    # whole since it has no markup of its own but goes out in HTML parse_mode.
+    await message.answer(
+        f"<b>Why {escape(game.name)}</b>\n{escape(scored.why())}", parse_mode="HTML"
+    )
 
 
 @router.message(Command("mute"))
@@ -277,9 +315,7 @@ async def cmd_mute(message: Message, command: CommandObject) -> None:
     key = _resolve_key(message)
     label = _label_for(message)
     async with session_scope() as session:
-        game = (
-            await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
-        ).scalar_one_or_none()
+        game = await _find_game(session, query)
         if game is None:
             await message.answer(f"No game matching “{query}”.")
             return
@@ -288,16 +324,17 @@ async def cmd_mute(message: Message, command: CommandObject) -> None:
         muted.add(game.id)
         prefs.muted_game_ids = sorted(muted)
         name = game.name
-    await message.answer(f"🔇 Muted <b>{name}</b>. I won't recommend it.", parse_mode="HTML")
+    await message.answer(
+        f"🔇 Muted <b>{escape(name)}</b>. I won't recommend it.", parse_mode="HTML"
+    )
 
 
 async def _set_tracked(query: str, tracked: bool) -> str | None:
-    """Set ``tracked`` on the first game matching ``query`` (ilike). Returns the
-    game name on success, or ``None`` when nothing matched."""
+    """Set ``tracked`` on the best game matching ``query``. Returns the game name
+    on success, or ``None`` when nothing matched. Prefers an exact-name match so
+    ``/track Dota`` doesn't flip tracking on "Dota 2 Workshop Tools"."""
     async with session_scope() as session:
-        game = (
-            await session.execute(select(Game).where(Game.name.ilike(f"%{query}%")).limit(1))
-        ).scalar_one_or_none()
+        game = await _find_game(session, query)
         if game is None:
             return None
         game.tracked = tracked
@@ -315,7 +352,8 @@ async def cmd_track(message: Message, command: CommandObject) -> None:
         await message.answer(f"No game matching “{query}”.")
         return
     await message.answer(
-        f"📈 Tracking <b>{name}</b> — player counts start within the hour.", parse_mode="HTML"
+        f"📈 Tracking <b>{escape(name)}</b> — player counts start within the hour.",
+        parse_mode="HTML",
     )
 
 
@@ -329,7 +367,7 @@ async def cmd_untrack(message: Message, command: CommandObject) -> None:
     if name is None:
         await message.answer(f"No game matching “{query}”.")
         return
-    await message.answer(f"📉 Stopped tracking <b>{name}</b>.", parse_mode="HTML")
+    await message.answer(f"📉 Stopped tracking <b>{escape(name)}</b>.", parse_mode="HTML")
 
 
 def resolve_genre(query: str, catalog: list[str]) -> tuple[str | None, list[str]]:
@@ -347,10 +385,13 @@ def resolve_genre(query: str, catalog: list[str]) -> tuple[str | None, list[str]
 
 
 def _no_match_reply(query: str, suggestions: list[str]) -> str:
+    # Sent with parse_mode=HTML; ``query`` is raw user input (e.g. "/subscribe <b"),
+    # so escape it — and the catalog-sourced hints — or Telegram rejects the reply.
+    q = escape(query)
     if suggestions:
-        hint = ", ".join(suggestions)
-        return f"No genre matching “{query}”. Did you mean: <b>{hint}</b>?"
-    return f"No genre matching “{query}”."
+        hint = ", ".join(escape(s) for s in suggestions)
+        return f"No genre matching “{q}”. Did you mean: <b>{hint}</b>?"
+    return f"No genre matching “{q}”."
 
 
 async def _toggle_subscription(
@@ -371,7 +412,9 @@ async def _toggle_subscription(
     """
     lowered = genre_canonical.lower()
     async with session_scope() as session:
-        prefs = await _ensure_prefs(session, key, label=label)
+        # Lock the row: two fast /genres taps in one polling batch must serialize,
+        # or the second's stale read silently drops the first's toggle.
+        prefs = await _ensure_prefs(session, key, label=label, for_update=True)
         subs = list(prefs.subscribed_genres or [])
         already = any(s.lower() == lowered for s in subs)
         if already:
@@ -415,7 +458,7 @@ async def cmd_subscribe(message: Message, command: CommandObject) -> None:
     else:
         _, tracked = await _toggle_subscription(canonical, key, label=label)
     await message.answer(
-        f"🧩 Subscribed to <b>{canonical}</b> — tracking {tracked} games in this genre.",
+        f"🧩 Subscribed to <b>{escape(canonical)}</b> — tracking {tracked} games in this genre.",
         parse_mode="HTML",
     )
 
@@ -439,7 +482,7 @@ async def cmd_unsubscribe(message: Message, command: CommandObject) -> None:
             return
         prefs.subscribed_genres = [s for s in subs if s.lower() != lowered]
     await message.answer(
-        f"🚫 Unsubscribed from <b>{match}</b>. (Already-tracked games stay tracked.)",
+        f"🚫 Unsubscribed from <b>{escape(match)}</b>. (Already-tracked games stay tracked.)",
         parse_mode="HTML",
     )
 
@@ -447,9 +490,10 @@ async def cmd_unsubscribe(message: Message, command: CommandObject) -> None:
 @router.message(Command("prefs"))
 async def cmd_prefs(message: Message) -> None:
     prefs = await _get_prefs(_resolve_key(message), label=_label_for(message))
-    liked = ", ".join(prefs.liked_genres) or "—"
-    blocked = ", ".join(prefs.blocked_genres) or "—"
-    subscribed = ", ".join(prefs.subscribed_genres) or "—"
+    # Genres are catalog-sourced; escape before HTML-mode interpolation.
+    liked = ", ".join(escape(g) for g in prefs.liked_genres) or "—"
+    blocked = ", ".join(escape(g) for g in prefs.blocked_genres) or "—"
+    subscribed = ", ".join(escape(g) for g in prefs.subscribed_genres) or "—"
     await message.answer(
         "<b>Your preferences</b>\n"
         f"Liked genres: {liked}\n"

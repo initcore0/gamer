@@ -234,7 +234,19 @@ class SteamStoreSource:
         entry = body.get(str(appid)) if isinstance(body, dict) else None
         if not isinstance(entry, dict) or not entry.get("success"):
             log.info("appdetails_unavailable", appid=appid)
-            return None
+            # Emit a "checked but unavailable" marker so the sink stamps
+            # details_fetched_at. Otherwise this appid keeps details_fetched_at
+            # NULL, and the NULLS-FIRST crawl queue re-selects it every run —
+            # delisted apps clog the queue head and starve real games forever.
+            return RawEvent(
+                source=self.name,
+                kind=EventKind.GAME,
+                natural_key=str(appid),
+                payload={"details_unavailable": True},
+                occurred_at=datetime.now(UTC),
+                platform_app_id=appid,
+                fetched_at=datetime.now(UTC),
+            )
         data = entry.get("data")
         if not isinstance(data, dict):
             return None

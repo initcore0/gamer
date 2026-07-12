@@ -9,13 +9,14 @@ never renders in logs or ``repr()``.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Literal
+from urllib.parse import quote
 
-from pydantic import Field, SecretStr, field_validator
-from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class DatabaseSettings(BaseSettings):
+class DatabaseSettings(BaseModel):
     """PostgreSQL connection. Password is local-only but still a secret."""
 
     host: str = "localhost"
@@ -25,19 +26,23 @@ class DatabaseSettings(BaseSettings):
     name: str = "gamer"
 
     def dsn(self, *, driver: str = "asyncpg") -> str:
-        """SQLAlchemy DSN. ``driver=asyncpg`` for the app, ``psycopg`` for alembic."""
+        """SQLAlchemy DSN. ``driver=asyncpg`` for the app, ``psycopg`` for alembic.
+
+        User and password are percent-encoded so credentials containing URL-
+        reserved characters (``@ : / %`` — common in generated passwords) don't
+        corrupt the DSN or silently decode to a different value.
+        """
         scheme = "postgresql+asyncpg" if driver == "asyncpg" else "postgresql+psycopg"
-        return (
-            f"{scheme}://{self.user}:{self.password.get_secret_value()}"
-            f"@{self.host}:{self.port}/{self.name}"
-        )
+        user = quote(self.user, safe="")
+        password = quote(self.password.get_secret_value(), safe="")
+        return f"{scheme}://{user}:{password}@{self.host}:{self.port}/{self.name}"
 
 
-class SteamSettings(BaseSettings):
+class SteamSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
 
 
-class TelegramSettings(BaseSettings):
+class TelegramSettings(BaseModel):
     bot_token: SecretStr = SecretStr("")
     dm_chat_id: int = 0
     group_chat_id: int = 0
@@ -47,8 +52,8 @@ class TelegramSettings(BaseSettings):
     # Comma-separated in the env var (GAMER_TELEGRAM__ALLOWED_CHAT_IDS=123,-456).
     # Empty (the default) means the bot is open to everyone; when non-empty, the
     # router's outer middleware politely refuses messages *and* callbacks from any
-    # chat not listed. NoDecode stops pydantic-settings JSON-parsing the CSV first.
-    allowed_chat_ids: Annotated[list[int], NoDecode] = Field(default_factory=list)
+    # chat not listed. Parsed from a CSV env value by the before-validator below.
+    allowed_chat_ids: list[int] = Field(default_factory=list)
 
     @field_validator("allowed_chat_ids", mode="before")
     @classmethod
@@ -58,7 +63,7 @@ class TelegramSettings(BaseSettings):
         return v
 
 
-class TwitchSettings(BaseSettings):
+class TwitchSettings(BaseModel):
     client_id: SecretStr = SecretStr("")
     client_secret: SecretStr = SecretStr("")
 
@@ -67,14 +72,14 @@ class TwitchSettings(BaseSettings):
         return bool(self.client_id.get_secret_value() and self.client_secret.get_secret_value())
 
 
-class EmbeddingsSettings(BaseSettings):
+class EmbeddingsSettings(BaseModel):
     enabled: bool = False
     model: str = "BAAI/bge-small-en-v1.5"
     # Dimensionality of the configured model; must match the pgvector column.
     dim: int = 384
 
 
-class LLMSettings(BaseSettings):
+class LLMSettings(BaseModel):
     enabled: bool = False
     # Which backend the endpoint speaks: Ollama's native /api/generate, or an
     # OpenAI-compatible /chat/completions (llama.cpp, vLLM, LM Studio, …).
@@ -87,13 +92,13 @@ class LLMSettings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
 
 
-class RssSettings(BaseSettings):
+class RssSettings(BaseModel):
     """Broader-news RSS feeds (PLAN.md §3). Pluggable list of feed URLs."""
 
     enabled: bool = True
-    # Comma-separated in the env var (GAMER_RSS__FEEDS=url1,url2). NoDecode stops
-    # pydantic-settings from JSON-parsing it first, so our validator splits the CSV.
-    feeds: Annotated[list[str], NoDecode] = Field(
+    # Comma-separated in the env var (GAMER_RSS__FEEDS=url1,url2); the before-
+    # validator below splits the CSV.
+    feeds: list[str] = Field(
         default_factory=lambda: [
             "https://www.pcgamer.com/rss/",
             "https://www.rockpapershotgun.com/feed",
@@ -109,7 +114,7 @@ class RssSettings(BaseSettings):
         return v
 
 
-class HealthSettings(BaseSettings):
+class HealthSettings(BaseModel):
     """Self-reporting / alerting (PLAN.md §6 M4). A source silent longer than
     ``stale_after_hours`` pings the streamer once."""
 
@@ -119,7 +124,7 @@ class HealthSettings(BaseSettings):
     api_port: int = 8080
 
 
-class UISettings(BaseSettings):
+class UISettings(BaseModel):
     """Web-UI options (UI_PLAN.md §6).
 
     ``public_base_url`` is the externally reachable origin of the read-only web
@@ -132,7 +137,7 @@ class UISettings(BaseSettings):
     public_base_url: str = ""
 
 
-class DiscordSettings(BaseSettings):
+class DiscordSettings(BaseModel):
     """Discord webhook transport (M5) — proves the Transport abstraction."""
 
     webhook_url: SecretStr = SecretStr("")
@@ -142,7 +147,7 @@ class DiscordSettings(BaseSettings):
         return bool(self.webhook_url.get_secret_value())
 
 
-class SwitchSettings(BaseSettings):
+class SwitchSettings(BaseModel):
     """Switch eShop release feed (M5) — proves the platform abstraction."""
 
     enabled: bool = False
@@ -159,6 +164,13 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        # Don't JSON-decode complex (list) env values — our CSV fields
+        # (rss.feeds, telegram.allowed_chat_ids) are plain comma-separated strings
+        # split by their own before-validators, not JSON arrays. (Previously the
+        # per-field NoDecode marker did this; it only works on BaseSettings, and
+        # the nested groups are now plain BaseModel so credentials can't leak in
+        # from unprefixed env vars like USER / CLIENT_ID.)
+        enable_decoding=False,
     )
 
     env: Literal["dev", "prod"] = "dev"

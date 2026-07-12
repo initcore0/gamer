@@ -50,7 +50,7 @@ class App:
         # Start the Telegram bot poller only when a token is configured, so the
         # ingestion pipeline can run headless (e.g. in CI / early build-in-public).
         if self.settings.telegram.bot_token.get_secret_value():
-            self._bot_task = asyncio.create_task(run_bot())
+            self._bot_task = asyncio.create_task(self._run_bot())
             log.info("bot_enabled")
         else:
             log.info("bot_disabled", reason="no bot_token configured")
@@ -76,6 +76,17 @@ class App:
         except Exception as exc:
             log.error("api_failed", error=f"{type(exc).__name__}: {exc}")
 
+    async def _run_bot(self) -> None:
+        """Run the Telegram poller, guarding so a poll failure (e.g. a revoked
+        token) is logged rather than swallowed into an unobserved task exception
+        that later re-raises out of ``shutdown`` and skips engine disposal."""
+        try:
+            await run_bot()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            log.error("bot_failed", error=f"{type(exc).__name__}: {exc}")
+
     def _install_signal_handlers(self) -> None:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGINT, signal.SIGTERM):
@@ -87,14 +98,15 @@ class App:
     async def shutdown(self) -> None:
         log.info("app_stopping")
         self.scheduler.shutdown()
-        if self._bot_task is not None:
-            self._bot_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._bot_task
-        if self._api_task is not None:
-            self._api_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._api_task
+        # Suppress *any* exception a background task stored, not just cancellation:
+        # a task that already died (e.g. a revoked bot token) must not re-raise here
+        # and skip the rest of shutdown — engine disposal below must always run.
+        for task in (self._bot_task, self._api_task):
+            if task is None:
+                continue
+            task.cancel()
+            with contextlib.suppress(Exception):
+                await task
         await dispose_engine()
         log.info("app_stopped")
 

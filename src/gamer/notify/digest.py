@@ -97,17 +97,24 @@ def apply_genre_quota(
         return cut
 
     subs = {g.lower() for g in subscribed}
-    in_cut_subscribed = [r for r in cut if _is_subscribed(r, subs)]
 
-    # How many subscribed picks exist across the entire ranked pool caps the target.
-    total_subscribed = sum(1 for r in ranked if _is_subscribed(r, subs))
+    # A promotable pick must be subscribed AND not suppressed — a score <= 0 means a
+    # penalty (e.g. blocklist) zeroed it, and the quota must never surface a game the
+    # streamer explicitly blocked just to fill a subscribed-genre slot.
+    def _promotable(r: ScoredRecommendation) -> bool:
+        return _is_subscribed(r, subs) and r.score > 0.0
+
+    in_cut_subscribed = [r for r in cut if _promotable(r)]
+
+    # How many promotable subscribed picks exist across the whole pool caps the target.
+    total_subscribed = sum(1 for r in ranked if _promotable(r))
     target = min(slots, total_subscribed, limit)
     if len(in_cut_subscribed) >= target:
         return cut
 
     need = target - len(in_cut_subscribed)
-    # Subscribed picks below the cut, best-first (ranked is already best-first).
-    below_subscribed = [r for r in ranked[limit:] if _is_subscribed(r, subs)]
+    # Promotable subscribed picks below the cut, best-first (ranked is best-first).
+    below_subscribed = [r for r in ranked[limit:] if _promotable(r)]
     promote = below_subscribed[:need]
     if not promote:
         return cut
@@ -127,9 +134,11 @@ def apply_genre_quota(
 def _fmt_mover(rank: int, m: Mover) -> str:
     arrow = "📈" if m.delta >= 0 else "📉"
     pct = f" ({m.pct:+.0f}%)" if m.pct is not None else ""
-    url = f"{_STEAM_STORE}{m.platform_app_id}"
+    url = escape(f"{_STEAM_STORE}{m.platform_app_id}", quote=True)
+    # m.name is Steam-sourced (e.g. "Emily is Away <3"): a stray < or & would make
+    # Telegram's HTML parse_mode reject the whole message (permanent send failure).
     return (
-        f'{rank}. <a href="{url}">{m.name}</a> {arrow} '
+        f'{rank}. <a href="{url}">{escape(m.name)}</a> {arrow} '
         f"{m.latest:,.0f} players ({m.delta:+,.0f}{pct})"
     )
 
@@ -225,8 +234,11 @@ def _scored_digest_text(
     """Render the scored-digest body (shared by the group and per-user DM builders)."""
     base = public_base_url.rstrip("/")
     if recs:
+        # r.name and the component reason are Steam/data-sourced: escape them so a
+        # stray < or & can never make Telegram reject the whole HTML message.
         lines = [
-            f"{i}. <b>{r.name}</b> — {_top_reason(r)}{_game_link(base, r) if base else ''}"
+            f"{i}. <b>{escape(r.name)}</b> — {escape(_top_reason(r))}"
+            f"{_game_link(base, r) if base else ''}"
             for i, r in enumerate(recs, start=1)
         ]
         body = "\n".join(lines)

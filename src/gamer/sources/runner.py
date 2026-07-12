@@ -69,6 +69,24 @@ async def _save_cursor(source_name: str, cursor: dict[str, Any], *, success: boo
             row.last_success_at = now
 
 
+async def _touch_cursor_run(source_name: str) -> None:
+    """Record a run attempt (``last_run_at``) without advancing the cursor.
+
+    Used when a run failed: staleness monitoring still sees the attempt, but the
+    checkpoint stays at the last successfully-persisted position so un-persisted
+    events are re-fetched next run rather than silently skipped.
+    """
+    now = datetime.now(UTC)
+    async with session_scope() as session:
+        row = await session.get(SourceCursor, source_name)
+        if row is None:
+            # No prior cursor: nothing to preserve; record the attempt with an
+            # empty cursor so the row exists for staleness checks.
+            row = SourceCursor(source=source_name, cursor={})
+            session.add(row)
+        row.last_run_at = now
+
+
 async def run_source(
     source: Source,
     sink: EventSink | None = None,
@@ -115,9 +133,16 @@ async def run_source(
         log.error("source_run_failed", source=name, error=error)
 
     success = error is None
-    # The source updates ctx.cursor in place as it advances; persist it either way
-    # so partial progress is not lost.
-    await _save_cursor(name, dict(ctx.cursor), success=success)
+    # The source advances ctx.cursor in place *as it yields* — before the sink has
+    # persisted those events. If persist failed, saving the advanced cursor would
+    # skip the un-persisted events forever (they're "already seen" next run). So on
+    # failure keep the previous checkpoint and re-fetch next run; the sink is
+    # idempotent (upsert by natural key), so re-fetching persisted events is a no-op.
+    if success:
+        await _save_cursor(name, dict(ctx.cursor), success=True)
+    else:
+        # Still stamp last_run_at (for staleness), but do NOT advance the cursor.
+        await _touch_cursor_run(name)
 
     async with session_scope() as session:
         db_job = await session.get(Job, job_id)

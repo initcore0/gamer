@@ -52,6 +52,11 @@ class RateLimiter:
             if self._allowance < 1.0:
                 sleep_for = (1.0 - self._allowance) * (self._per / self._rate)
                 await asyncio.sleep(sleep_for)
+                # We slept exactly long enough to earn one token, then spend it.
+                # Advance _last past the slept interval too, otherwise the next
+                # acquire's `elapsed` would re-credit these same tokens a second
+                # time — doubling the effective rate (429s against polite APIs).
+                self._last = loop.time()
                 self._allowance = 0.0
             else:
                 self._allowance -= 1.0

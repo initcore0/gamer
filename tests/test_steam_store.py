@@ -149,7 +149,11 @@ async def test_appdetails_paid_game_price_and_genres() -> None:
 
 
 @respx.mock
-async def test_appdetails_success_false_skipped_without_error() -> None:
+async def test_appdetails_success_false_emits_unavailable_marker() -> None:
+    """A success:false response must still emit a GAME marker so the sink stamps
+    details_fetched_at — otherwise the NULLS-FIRST crawl queue re-selects the same
+    delisted appid every run and starves real games. No metadata is set, but the
+    marker moves the appid out of the queue head."""
     respx.get(APPDETAILS_URL, params={"appids": "999999", "l": "en"}).mock(
         return_value=httpx.Response(200, json=APPDETAILS_FAILURE)
     )
@@ -159,7 +163,11 @@ async def test_appdetails_success_false_skipped_without_error() -> None:
         fetch_reviews=False,
     )
     events = await _collect(source, FetchContext())
-    assert events == []
+    assert len(events) == 1
+    ev = events[0]
+    assert ev.kind is EventKind.GAME
+    assert ev.platform_app_id == 999999
+    assert ev.payload == {"details_unavailable": True}
 
 
 # ── news → NEWS ───────────────────────────────────────────────────────────────

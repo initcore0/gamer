@@ -192,6 +192,43 @@ async def test_player_count_500_is_handled_gracefully() -> None:
     assert events == []
 
 
+@respx.mock
+async def test_player_count_per_app_error_does_not_abort_remaining() -> None:
+    """A per-app transport error must skip only that appid, not starve the sweep.
+
+    Regression: the loop used to ``return`` on any upstream error, so one failing
+    appid stopped player-count sampling for every appid after it — the core
+    popularity signal silently decayed for most tracked games.
+    """
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+
+    def _by_appid(request: httpx.Request) -> httpx.Response:
+        # The first tracked appid errors at the transport level; the rest succeed.
+        if request.url.params.get("appid") == "440":
+            raise httpx.ConnectError("boom")
+        return httpx.Response(200, json={"response": {"player_count": 5, "result": 1}})
+
+    respx.get(_PLAYER_COUNT_URL).mock(side_effect=_by_appid)
+    source = _source([440, 570, 730])
+    events = await _collect(source, FetchContext())
+    players = [e for e in events if e.kind is EventKind.PLAYER_COUNT]
+    # 440 skipped, but 570 and 730 still sampled.
+    assert sorted(e.platform_app_id for e in players) == [570, 730]
+
+
+@respx.mock
+async def test_player_count_rate_limit_stops_sweep() -> None:
+    """A sustained 429 (RetryableStatus after retries) still stops the sweep so we
+    don't hammer Steam — the intentional backoff, distinct from a per-app error."""
+    respx.get(_MOST_PLAYED_URL).mock(return_value=httpx.Response(200, json=_ranks()))
+    respx.get(_APP_LIST_URL).mock(return_value=httpx.Response(200, json={"applist": {"apps": []}}))
+    respx.get(_PLAYER_COUNT_URL).mock(return_value=httpx.Response(429))
+    source = _source([440, 570])
+    events = await _collect(source, FetchContext())
+    assert [e for e in events if e.kind is EventKind.PLAYER_COUNT] == []
+
+
 # --- Key-authenticated, paginated catalog path (IStoreService/GetAppList/v1) -------
 
 
