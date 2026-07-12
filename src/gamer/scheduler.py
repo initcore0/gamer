@@ -27,6 +27,18 @@ class Scheduler:
         self._scheduler.add_job(fn, "interval", seconds=seconds, id=name, name=name)
         log.info("job_registered", name=name, interval_seconds=seconds)
 
+    def add_daily_job(self, fn: JobFn, *, hour: int, minute: int = 0, name: str) -> None:
+        """Run ``fn`` every day at a fixed UTC time (cron trigger).
+
+        Unlike an interval job — whose first firing is one full interval after
+        boot, so a daily job drifts with every restart — a cron job fires at the
+        same wall-clock time regardless of when the process started.
+        """
+        self._scheduler.add_job(
+            fn, "cron", hour=hour, minute=minute, timezone="UTC", id=name, name=name
+        )
+        log.info("job_registered", name=name, daily_at=f"{hour:02d}:{minute:02d}Z")
+
     def start(self) -> None:
         self._scheduler.start()
         log.info("scheduler_started", jobs=len(self._scheduler.get_jobs()))

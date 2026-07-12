@@ -41,6 +41,8 @@ class TelegramSettings(BaseSettings):
     bot_token: SecretStr = SecretStr("")
     dm_chat_id: int = 0
     group_chat_id: int = 0
+    # UTC hour the daily digest fires (cron, so restarts don't drift it).
+    digest_hour_utc: int = Field(default=16, ge=0, le=23)
 
 
 class TwitchSettings(BaseSettings):

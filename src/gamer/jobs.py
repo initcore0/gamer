@@ -165,9 +165,13 @@ def register_jobs(scheduler: Scheduler, settings: Settings) -> None:
         interval = factory().default_interval_seconds
         scheduler.add_interval_job(_make_source_job(name), seconds=interval, name=f"poll:{name}")
 
-    # Daily digest. Guarded by the group chat being configured.
+    # Daily digest at a fixed UTC hour. A cron trigger (not a 24h interval) so a
+    # restart never delays the digest by a day. Guarded by the group chat being
+    # configured.
     if settings.telegram.group_chat_id:
-        scheduler.add_interval_job(run_digest_once, seconds=24 * 3600, name="digest")
+        scheduler.add_daily_job(
+            run_digest_once, hour=settings.telegram.digest_hour_utc, name="digest"
+        )
     else:
         log.info("digest_disabled", reason="no group_chat_id configured")
 

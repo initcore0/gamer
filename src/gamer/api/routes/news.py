@@ -11,11 +11,12 @@ reaches SQL as an injected literal). No SQL here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
+from gamer.api.deps import EmptyStrToNone
 from gamer.api.queries import news as news_q
 from gamer.api.templating import templates
 
@@ -33,7 +34,7 @@ async def _validated_source(source: str | None) -> tuple[str | None, list[str]]:
 async def news_page(
     request: Request,
     source: str | None = Query(default=None),
-    game_id: int | None = Query(default=None),
+    game_id: Annotated[int | None, EmptyStrToNone] = None,
     cursor: str | None = Query(default=None),
 ) -> HTMLResponse:
     chosen, allow = await _validated_source(source)
@@ -47,7 +48,7 @@ async def news_page(
 @router.get("/api/v1/news")
 async def news_json(
     source: str | None = Query(default=None),
-    game_id: int | None = Query(default=None),
+    game_id: Annotated[int | None, EmptyStrToNone] = None,
     cursor: str | None = Query(default=None),
     limit: int = Query(default=news_q.DEFAULT_LIMIT, ge=1, le=100),
 ) -> dict[str, Any]:

@@ -12,11 +12,12 @@ the static ``/static/charts.js`` reading data-* attributes — no inline scripts
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, JSONResponse
 
+from gamer.api.deps import EmptyStrToNone
 from gamer.api.queries import game_detail as detail_q
 from gamer.api.queries import signals as signals_q
 from gamer.api.queries.signals import SeriesMetric, SeriesRange
@@ -84,12 +85,12 @@ async def game_detail_json(game_id: int) -> dict[str, Any]:
 async def game_series_json(
     game_id: int,
     metric: SeriesMetric = Query(...),
-    range: SeriesRange = Query(default=SeriesRange.D7),
+    range: Annotated[SeriesRange | None, EmptyStrToNone] = SeriesRange.D7,
 ) -> Response:
     detail = await detail_q.game_detail(game_id)
     if detail is None:
         raise HTTPException(status_code=404, detail="game not found")
-    result = await signals_q.series(game_id, metric, range)
+    result = await signals_q.series(game_id, metric, range or SeriesRange.D7)
     return JSONResponse(
         {"ts": result.ts, "values": result.values},
         headers={"Cache-Control": _SERIES_CACHE},
