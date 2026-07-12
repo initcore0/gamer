@@ -31,6 +31,12 @@ def configure_logging(*, level: str = "INFO", json: bool = False) -> None:
     """Configure structlog + stdlib logging once at startup."""
     logging.basicConfig(format="%(message)s", stream=sys.stdout, level=level.upper())
 
+    # httpx/httpcore log every request URL at INFO — including credential query
+    # params (Steam's key=…) that redact_secrets never sees because these lines
+    # bypass structlog. Keep them at WARNING so no URL ever hits the logs.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
     processors: list[structlog.typing.Processor] = [
         structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,

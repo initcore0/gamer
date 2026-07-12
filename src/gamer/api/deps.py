@@ -18,6 +18,20 @@ import binascii
 import json
 from typing import Any
 
+from pydantic import BeforeValidator
+
+
+def _empty_str_to_none(value: object) -> object:
+    if isinstance(value, str) and value.strip() == "":
+        return None
+    return value
+
+
+# The filter <form> submits unselected fields as empty strings ("platform=&genre=");
+# FastAPI would 422 coercing "" into an enum/int/bool. Optional typed query params
+# annotate with this so "" degrades to "not provided" instead of rejecting the request.
+EmptyStrToNone = BeforeValidator(_empty_str_to_none)
+
 # ILIKE special characters that must be escaped so user input is treated as a
 # literal, not a pattern. Backslash first so we don't double-escape.
 _LIKE_SPECIALS = ("\\", "%", "_")

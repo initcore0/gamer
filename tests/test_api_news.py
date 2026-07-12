@@ -82,6 +82,16 @@ def test_news_bad_source_is_dropped(monkeypatch: pytest.MonkeyPatch) -> None:
     assert news_route._CAPTURED["source"] is None  # type: ignore[attr-defined]
 
 
+def test_news_empty_filter_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The filter form submits unselected fields as empty strings — ``game_id=``
+    must degrade to None (unfiltered), not 422 on int coercion."""
+    _patch(monkeypatch)
+    client = TestClient(build_api())
+    resp = client.get("/news?source=&game_id=")
+    assert resp.status_code == 200
+    assert news_route._CAPTURED["game_id"] is None  # type: ignore[attr-defined]
+
+
 def test_news_valid_source_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch(monkeypatch)
     client = TestClient(build_api())

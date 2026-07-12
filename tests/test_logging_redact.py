@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from gamer.logging import redact_secrets
+import logging
+
+from gamer.logging import configure_logging, redact_secrets
 
 
 def test_redacts_steam_key_in_httpx_style_error() -> None:
@@ -26,3 +28,11 @@ def test_redacts_common_secret_params_case_insensitive() -> None:
 def test_plain_text_unchanged() -> None:
     msg = "TimeoutError: timed out after 20s"
     assert redact_secrets(msg) == msg
+
+
+def test_httpx_request_urls_never_logged_at_info() -> None:
+    # httpx logs "HTTP Request: GET <full url>" (incl. key=…) at INFO via stdlib
+    # logging, bypassing redact_secrets — configure_logging must silence it.
+    configure_logging(level="INFO")
+    for noisy in ("httpx", "httpcore"):
+        assert not logging.getLogger(noisy).isEnabledFor(logging.INFO)

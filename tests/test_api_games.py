@@ -107,6 +107,25 @@ def test_games_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
+def test_games_search_with_empty_filter_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The filter form submits unselected fields as empty strings — the exact
+    query string the search box sends must not 422 (regression: every UI search
+    failed because ``platform=`` broke enum coercion)."""
+    _patch_games(monkeypatch)
+    client = TestClient(build_api())
+    resp = client.get("/games?q=dota&platform=&genre=&sort=name")
+    assert resp.status_code == 200
+    assert "Celeste" in resp.text
+
+
+def test_games_json_empty_filter_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_games(monkeypatch)
+    client = TestClient(build_api())
+    resp = client.get("/api/v1/games?q=dota&platform=&genre=&sort=&tracked=&active=")
+    assert resp.status_code == 200
+    assert resp.json()["games"]
+
+
 def test_games_json_invalid_sort_is_422() -> None:
     client = TestClient(build_api())
     resp = client.get("/api/v1/games", params={"sort": "bogus"})
