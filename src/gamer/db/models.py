@@ -229,10 +229,25 @@ class Recommendation(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     game_id: Mapped[int] = mapped_column(ForeignKey("games.id", ondelete="CASCADE"))
+    # The preference profile that owns this recommendation (multi-user, M-MU).
+    # ``str(telegram_chat_id)``; ``'default'`` is the legacy/global profile.
+    # Server-default ``'default'`` so pre-multiuser rows backfill to the legacy key.
+    pref_key: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="default", server_default="default"
+    )
     score: Mapped[float] = mapped_column(Float, nullable=False)
     # Per-component contributions for explainability ("why this game").
     breakdown: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+# Per-profile cooldown lookup + user_key-filtered feed both seek on this
+# (declared post-class so ``Recommendation.created_at`` resolves to a column).
+Index(
+    "ix_rec_prefkey_created",
+    Recommendation.pref_key,
+    Recommendation.created_at.desc(),
+)
 
 
 class FeedbackVerdict(enum.StrEnum):
@@ -259,6 +274,9 @@ class StreamerPref(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(64), unique=True, nullable=False, default="default")
+    # Human display name for this profile (multi-user, M-MU): the DM user's full
+    # name or the group chat's title. NULL for the legacy ``'default'`` profile.
+    label: Mapped[str | None] = mapped_column(Text)
     liked_genres: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     blocked_genres: Mapped[list[str]] = mapped_column(JSONB, nullable=False, default=list)
     # Genres the streamer has *subscribed* to (M7): a hard "always cover this" set,
