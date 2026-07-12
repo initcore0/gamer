@@ -72,6 +72,8 @@ def test_serialize_shape() -> None:
         "text": "Play Hades",
         "buttons": [{"text": "👍", "action": "feedback:up:1"}],
         "meta": {"parse_mode": "HTML"},
+        # multi-user: per-message target chat override (None => transport default).
+        "target_chat_id": None,
     }
     # channel / dedup_key are columns, not payload.
     assert "channel" not in payload

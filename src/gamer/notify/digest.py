@@ -6,6 +6,7 @@ so the same digest can go to Telegram now and Discord later.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from html import escape
 
@@ -14,6 +15,53 @@ from gamer.scoring.base import ScoredRecommendation
 from gamer.signals.movers import Mover
 
 _STEAM_STORE = "https://store.steampowered.com/app/"
+
+
+def select_dm_digest_keys(prefs: Iterable[tuple[str, bool]], *, group_chat_id: int) -> list[int]:
+    """Pick which profiles get a per-user DM digest (multi-user fan-out).
+
+    Pure and unit-tested. ``prefs`` is ``(key, digest_enabled)`` for every prefs
+    row. A profile qualifies when *all* hold:
+
+    * ``digest_enabled`` is true,
+    * its ``key`` parses as a **positive** int — i.e. a Telegram DM chat (group
+      /supergroup ids are negative; ``'default'`` and other non-numeric keys are
+      skipped),
+    * it is **not** the group's own chat id (the group digest already covers it).
+
+    Returns the qualifying chat ids as ``int`` (deduplicated, input order
+    preserved) so the caller can score + deliver one DM digest per user.
+    """
+    seen: set[int] = set()
+    out: list[int] = []
+    for key, enabled in prefs:
+        if not enabled:
+            continue
+        chat_id = _as_positive_int(key)
+        if chat_id is None or chat_id == group_chat_id or chat_id in seen:
+            continue
+        seen.add(chat_id)
+        out.append(chat_id)
+    return out
+
+
+def _as_positive_int(key: str) -> int | None:
+    """``key`` as a positive int (a DM chat id), else ``None``."""
+    try:
+        value = int(key)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def dm_digest_dedup_key(chat_id: int, day: date) -> str:
+    """Per-user DM digest dedup key ``digest:<date>:dm:<chat_id>`` (multi-user).
+
+    Including the target chat makes each user's daily digest dedup independently,
+    so one user's delivery never blocks another's (they'd collide on a shared
+    ``digest:<date>`` key otherwise).
+    """
+    return f"digest:{day.isoformat()}:dm:{chat_id}"
 
 
 def _is_subscribed(rec: ScoredRecommendation, subscribed: set[str]) -> bool:
@@ -158,6 +206,23 @@ def build_scored_digest(
     byte-identical to before this feature.
     """
     day = for_day or date.today()
+    text = _scored_digest_text(recs, day=day, summary=summary, public_base_url=public_base_url)
+    return Notification(
+        channel=channel,
+        text=text,
+        dedup_key=f"digest:{channel.value}:{day.isoformat()}",
+        meta={"parse_mode": "HTML", "disable_web_page_preview": True},
+    )
+
+
+def _scored_digest_text(
+    recs: list[ScoredRecommendation],
+    *,
+    day: date,
+    summary: str | None,
+    public_base_url: str,
+) -> str:
+    """Render the scored-digest body (shared by the group and per-user DM builders)."""
     base = public_base_url.rstrip("/")
     if recs:
         lines = [
@@ -172,12 +237,31 @@ def build_scored_digest(
     if summary:
         # LLM output is untrusted markup: a stray < or & would make Telegram's
         # HTML parse_mode reject the whole message (permanent send failure).
-        text = f"{header}\n\n<i>{escape(summary)}</i>\n\n{body}"
-    else:
-        text = f"{header}\n\n{body}"
+        return f"{header}\n\n<i>{escape(summary)}</i>\n\n{body}"
+    return f"{header}\n\n{body}"
+
+
+def build_dm_digest(
+    recs: list[ScoredRecommendation],
+    *,
+    chat_id: int,
+    for_day: date | None = None,
+    summary: str | None = None,
+    public_base_url: str = "",
+) -> Notification:
+    """Per-user DM digest addressed to ``chat_id`` (multi-user fan-out).
+
+    Same body as the group scored digest, but delivered over the interactive DM
+    channel with a ``target_chat_id`` override so one DM transport can fan out to
+    every subscriber. The dedup key includes the chat (:func:`dm_digest_dedup_key`)
+    so each user's daily digest dedups independently.
+    """
+    day = for_day or date.today()
+    text = _scored_digest_text(recs, day=day, summary=summary, public_base_url=public_base_url)
     return Notification(
-        channel=channel,
+        channel=Channel.TELEGRAM_DM,
         text=text,
-        dedup_key=f"digest:{channel.value}:{day.isoformat()}",
+        dedup_key=dm_digest_dedup_key(chat_id, day),
         meta={"parse_mode": "HTML", "disable_web_page_preview": True},
+        target_chat_id=chat_id,
     )

@@ -58,6 +58,7 @@ def serialize_notification(msg: Notification) -> dict[str, Any]:
         "text": msg.text,
         "buttons": [{"text": b.text, "action": b.action} for b in msg.buttons],
         "meta": msg.meta,
+        "target_chat_id": msg.target_chat_id,
     }
 
 
@@ -72,6 +73,7 @@ def deserialize_notification(
         dedup_key=dedup_key,
         buttons=buttons,
         meta=dict(payload.get("meta", {})),
+        target_chat_id=payload.get("target_chat_id"),
     )
 
 

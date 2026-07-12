@@ -28,7 +28,12 @@ from gamer.notify import (
     dispatch_pending,
     enqueue,
 )
-from gamer.notify.digest import build_digest, build_scored_digest
+from gamer.notify.digest import (
+    build_digest,
+    build_dm_digest,
+    build_scored_digest,
+    select_dm_digest_keys,
+)
 from gamer.scheduler import Scheduler
 from gamer.scoring.service import recommend
 from gamer.signals.movers import top_movers
@@ -62,22 +67,55 @@ def _make_source_job(name: str) -> Callable[[], Awaitable[None]]:
 
 
 async def run_digest_once() -> None:
-    """Build → enqueue → dispatch the daily digest. Idempotent per day (outbox).
+    """Build → enqueue → dispatch the daily digests. Idempotent per day (outbox).
 
-    Prefers the scored recommender (M3); falls back to the naive top-movers digest
-    when the scorer has nothing yet (no components/candidates).
+    Two fan-outs (multi-user):
+
+    * the **group** broadcast — scored for the group's own profile
+      (``str(group_chat_id)``), falling back to the legacy ``'default'`` profile
+      when no group prefs row exists yet (so subscriptions keep applying right
+      after the migration, before anyone talks to the bot). Also mirrored to
+      Discord when configured.
+    * a per-user **DM** digest for every prefs row with ``digest_enabled`` whose
+      key is a DM chat (positive int, excluding the group). Each is scored for
+      that user, deduped independently, and a failure for one user never aborts
+      the others.
+
+    Both prefer the scored recommender (M3), falling back to the naive top-movers
+    digest when the scorer has nothing yet.
     """
-    if not await _digest_enabled():
-        log.info("digest_skipped", reason="disabled via /digest off")
-        return
     settings = get_settings()
+    group_key = _group_digest_key(settings)
 
-    # Reserve up to 3 digest slots for subscribed-genre picks (M7). With no
-    # subscriptions the quota is a no-op and this path is byte-identical to before.
-    recs = await recommend(limit=10, subscribed_quota=3)
+    # Enqueue every digest first, then dispatch the whole batch once.
+    await _run_group_digest(settings, group_key)
+    await _run_dm_digests(settings)
+
+    transports = build_all_transports(settings)
+    try:
+        stats = await dispatch_pending(transports)
+    finally:
+        await aclose_transports(transports)
+    log.info("digest_dispatched", sent=stats.sent, failed=stats.failed)
+
+
+def _group_digest_key(settings: Settings) -> str:
+    """The profile key the group digest scores against: the group chat id."""
+    return str(settings.telegram.group_chat_id)
+
+
+async def _run_group_digest(settings: Settings, group_key: str) -> None:
+    """Enqueue the group (and Discord) digest scored for the group profile."""
+    # Score for the group profile; if it has no prefs row yet, fall back to the
+    # legacy 'default' profile so subscriptions keep applying post-migration.
+    enabled = await _digest_enabled(group_key, fallback_key="default")
+    if not enabled:
+        log.info("digest_skipped", reason="group digest disabled via /digest off")
+        return
+    score_key = await _resolve_score_key(group_key, fallback_key="default")
+
+    recs = await recommend(limit=10, key=score_key, subscribed_quota=3)
     if recs:
-        # Optional LLM blurb (M4). Fail-open: returns None when disabled/unreachable,
-        # and the digest then renders exactly as it did before the LLM existed.
         summary = await LLMSummarizer().summarize_digest([r.name for r in recs])
 
         def _build(channel: Channel) -> Notification:
@@ -87,34 +125,66 @@ async def run_digest_once() -> None:
                 summary=summary,
                 public_base_url=settings.ui.public_base_url,
             )
-
-        source = "scorer"
     else:
         movers = await top_movers(limit=10)
 
         def _build(channel: Channel) -> Notification:
             return build_digest(movers, channel=channel)
 
-        source = "movers"
-
     # Telegram group is always a target; Discord fans out only when configured.
-    # Same content, different channel (and thus a distinct dedup_key) per build.
     channels = [Channel.TELEGRAM_GROUP]
     if settings.discord.enabled:
         channels.append(Channel.DISCORD)
     for channel in channels:
         await enqueue(_build(channel))
 
-    transports = build_all_transports(settings)
-    try:
-        stats = await dispatch_pending(transports)
-    finally:
-        await aclose_transports(transports)
-    log.info("digest_dispatched", source=source, sent=stats.sent, failed=stats.failed)
+
+async def _run_dm_digests(settings: Settings) -> None:
+    """Enqueue a per-user DM digest for each qualifying prefs profile (multi-user).
+
+    One failure never aborts the rest: each user's scoring is guarded so a single
+    bad profile is logged and skipped. Empty recs => skip silently (no spam).
+    """
+    rows = await _all_digest_prefs()
+    chat_ids = select_dm_digest_keys(rows, group_chat_id=settings.telegram.group_chat_id)
+    for chat_id in chat_ids:
+        try:
+            recs = await recommend(limit=10, key=str(chat_id), subscribed_quota=3)
+            if not recs:
+                continue
+            summary = await LLMSummarizer().summarize_digest([r.name for r in recs])
+            await enqueue(
+                build_dm_digest(
+                    recs,
+                    chat_id=chat_id,
+                    summary=summary,
+                    public_base_url=settings.ui.public_base_url,
+                )
+            )
+        except Exception:
+            # A per-user failure must not take down every other user's digest.
+            log.exception("dm_digest_failed", chat_id=chat_id)
 
 
-async def _digest_enabled(key: str = "default") -> bool:
-    """The streamer's ``/digest on|off`` preference (default: on)."""
+async def _all_digest_prefs() -> list[tuple[str, bool]]:
+    """Every prefs row as ``(key, digest_enabled)`` — the DM fan-out selection set."""
+    from sqlalchemy import select
+
+    from gamer.db import session_scope
+    from gamer.db.models import StreamerPref
+
+    async with session_scope() as session:
+        rows = (await session.execute(select(StreamerPref.key, StreamerPref.digest_enabled))).all()
+    return [(key, bool(enabled)) for key, enabled in rows]
+
+
+async def _digest_enabled(key: str, *, fallback_key: str | None = None) -> bool:
+    """Whether profile ``key`` has the digest enabled (default: on for a missing row).
+
+    When ``key`` has no prefs row and ``fallback_key`` is given, the fallback
+    profile's preference is used instead (so the group digest honors the legacy
+    ``'default'`` toggle until a group profile exists).
+    """
     from sqlalchemy import select
 
     from gamer.db import session_scope
@@ -126,7 +196,27 @@ async def _digest_enabled(key: str = "default") -> bool:
                 select(StreamerPref.digest_enabled).where(StreamerPref.key == key)
             )
         ).scalar_one_or_none()
+        if enabled is None and fallback_key is not None:
+            enabled = (
+                await session.execute(
+                    select(StreamerPref.digest_enabled).where(StreamerPref.key == fallback_key)
+                )
+            ).scalar_one_or_none()
     return True if enabled is None else bool(enabled)
+
+
+async def _resolve_score_key(key: str, *, fallback_key: str) -> str:
+    """Return ``key`` if it has a prefs row, else ``fallback_key`` (group→default)."""
+    from sqlalchemy import select
+
+    from gamer.db import session_scope
+    from gamer.db.models import StreamerPref
+
+    async with session_scope() as session:
+        exists = (
+            await session.execute(select(StreamerPref.id).where(StreamerPref.key == key))
+        ).scalar_one_or_none()
+    return key if exists is not None else fallback_key
 
 
 async def run_health_check_once() -> None:
