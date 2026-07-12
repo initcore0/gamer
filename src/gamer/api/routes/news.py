@@ -1,8 +1,7 @@
-"""News-stream routes (UI_PLAN.md §3.5 / §8 UI-M4).
+"""News-stream JSON routes (API_CONTRACT.md §News).
 
-* ``GET /news``        → the cluster-grouped stream (full page, or the cards
-  fragment when HTMX asks — like the catalog's filter/load-more).
-* ``GET /api/v1/news`` → JSON twin.
+* ``GET /api/v1/news``         → the cluster-grouped stream.
+* ``GET /api/v1/news/sources`` → the source-filter allowlist.
 
 All SQL lives in ``queries.news``; the ``source`` filter is validated against the
 distinct-sources allowlist here (a bad value → first page, unfiltered — never
@@ -13,12 +12,10 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Query
 
 from gamer.api.deps import EmptyStrToNone
 from gamer.api.queries import news as news_q
-from gamer.api.templating import templates
 
 router = APIRouter()
 
@@ -28,21 +25,6 @@ async def _validated_source(source: str | None) -> tuple[str | None, list[str]]:
     allow = await news_q.news_sources()
     chosen = source if source in allow else None
     return chosen, allow
-
-
-@router.get("/news", response_class=HTMLResponse)
-async def news_page(
-    request: Request,
-    source: str | None = Query(default=None),
-    game_id: Annotated[int | None, EmptyStrToNone] = None,
-    cursor: str | None = Query(default=None),
-) -> HTMLResponse:
-    chosen, allow = await _validated_source(source)
-    page = await news_q.news_stream(source=chosen, game_id=game_id, cursor=cursor)
-    filters = {"source": chosen or "", "game_id": game_id}
-    context = {"page": page, "sources": allow, "filters": filters}
-    template = "_fragments/news_cards.html" if request.headers.get("HX-Request") else "news.html"
-    return templates.TemplateResponse(request, template, context)
 
 
 @router.get("/api/v1/news")
@@ -62,8 +44,21 @@ async def news_json(
                 "url": card.url,
                 "source": card.source,
                 "published_at": card.published_at.isoformat() if card.published_at else None,
+                # The cluster-deduped stream card doesn't carry the game join;
+                # the contract keeps these fields present (null) for the SPA.
+                "game_id": getattr(card, "game_id", None),
+                "game_name": getattr(card, "game_name", None),
                 "cluster_id": card.cluster_id,
                 "similar_count": card.similar_count,
+                "similar": [
+                    {
+                        "id": ref.id,
+                        "title": ref.title,
+                        "url": ref.url,
+                        "source": ref.source,
+                    }
+                    for ref in card.similar
+                ],
             }
             for card in page.cards
         ],

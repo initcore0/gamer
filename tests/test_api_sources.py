@@ -1,7 +1,7 @@
-"""Sources ops-view unit tests (UI_PLAN.md §3.6, UI-M4).
+"""Sources ops-view JSON route tests (API_CONTRACT.md §Ops).
 
 ``_truncate_error`` (server-side error truncation, §7) is pure — unit-tested
-directly. Routes are exercised with monkeypatched queries so they run through
+directly. The route is exercised with monkeypatched queries so it runs through
 FastAPI without Postgres. Live-DB overview/events are in the integration file.
 """
 
@@ -62,20 +62,6 @@ def _patch(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(sources_route.sources_q, "source_overview", _fake_overview)
     monkeypatch.setattr(sources_route.sources_q, "events_per_day", _fake_events)
-
-
-def test_sources_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/sources")
-    assert resp.status_code == 200
-    html = resp.text
-    assert "<html" in html
-    assert "rss" in html
-    assert "STALE" in html
-    assert "HTTPError: boom" in html  # (truncated) error surfaced
-    assert "<svg" in html  # events bar chart rendered server-side
-    assert "Events per day" in html
 
 
 def test_sources_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:

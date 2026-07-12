@@ -91,27 +91,6 @@ def _patch(monkeypatch: pytest.MonkeyPatch, page: RecPage = _FIXTURE) -> None:
     monkeypatch.setattr(recs_route.recs_q, "list_recommendations", _fake)
 
 
-def test_recs_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/recommendations")
-    assert resp.status_code == 200
-    html = resp.text
-    assert "<html" in html
-    assert "Hades" in html
-    assert "surging" in html  # breakdown bar reason rendered in the expander
-    assert "sent" in html and "unsent" in html
-    assert "Load more" in html
-
-
-def test_recs_hx_fragment(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/recommendations", headers={"HX-Request": "true"})
-    assert "<html" not in resp.text
-    assert "Hades" in resp.text
-
-
 def test_recs_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch(monkeypatch)
     client = TestClient(build_api())

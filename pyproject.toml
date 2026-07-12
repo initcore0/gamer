@@ -63,7 +63,7 @@ artifacts = [
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]
-extend-exclude = [".claude"]
+extend-exclude = [".claude", "web"]
 
 [tool.ruff.lint]
 select = [
