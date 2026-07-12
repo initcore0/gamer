@@ -50,6 +50,44 @@ def test_twitch_enabled_when_both_set(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Settings().twitch.enabled is True
 
 
+def test_unprefixed_env_vars_never_leak_into_nested_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nested settings groups must ONLY read GAMER_-prefixed env vars.
+
+    Regression: the groups were BaseSettings, which each independently scanned the
+    environment — so a plain ``USER`` / ``CLIENT_ID`` / ``CLIENT_SECRET`` (common
+    in shells and CI) leaked into db.user / twitch credentials, breaking DB auth or
+    silently self-enabling Twitch with garbage creds.
+    """
+    for key in list(__import__("os").environ):
+        if key.startswith("GAMER_"):
+            monkeypatch.delenv(key, raising=False)
+    monkeypatch.setenv("USER", "not-the-db-user")
+    monkeypatch.setenv("CLIENT_ID", "leaked-id")
+    monkeypatch.setenv("CLIENT_SECRET", "leaked-secret")
+    monkeypatch.setenv("API_KEY", "leaked-key")
+    get_settings.cache_clear()
+    s = Settings()
+    assert s.db.user == "gamer"  # default, not $USER
+    assert s.twitch.client_id.get_secret_value() == ""
+    assert s.twitch.client_secret.get_secret_value() == ""
+    assert s.twitch.enabled is False
+    assert s.steam.api_key.get_secret_value() == ""
+
+
+def test_dsn_percent_escapes_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Passwords with URL-reserved chars must not corrupt the DSN."""
+    monkeypatch.setenv("GAMER_DB__PASSWORD", "p@ss:w0rd/%x")
+    monkeypatch.setenv("GAMER_DB__USER", "ga mer")
+    get_settings.cache_clear()
+    dsn = Settings().db.dsn()
+    # Raw reserved chars must be encoded so the URL still parses to the right parts.
+    assert "p@ss:w0rd" not in dsn
+    assert "p%40ss%3Aw0rd%2F%25x" in dsn
+    assert "ga%20mer" in dsn
+
+
 def test_rss_feeds_default(monkeypatch: pytest.MonkeyPatch) -> None:
     for key in list(__import__("os").environ):
         if key.startswith("GAMER_"):

@@ -159,7 +159,13 @@ class DbEventSink:
         if "release_date" in p:
             values["release_date"] = _parse_dt(p["release_date"])
             update_cols["release_date"] = values["release_date"]
-        if any(k in p for k in ("genres", "price_cents", "is_free", "release_date")):
+        # Stamp details_fetched_at when we actually fetched details — including a
+        # "checked but unavailable" marker (delisted app / success:false), so the
+        # NULLS-FIRST crawl queue advances past permanently-unavailable appids
+        # instead of re-selecting them every run.
+        if p.get("details_unavailable") or any(
+            k in p for k in ("genres", "price_cents", "is_free", "release_date")
+        ):
             update_cols["details_fetched_at"] = datetime.now(UTC)
 
         stmt = (

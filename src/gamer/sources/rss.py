@@ -194,11 +194,15 @@ class RssSource:
             natural_key = _entry_natural_key(entry)
             published = _entry_published(entry, now)
 
-            # Stop at content we've already emitted (feeds are newest-first): an id
-            # match, or an entry at/older than the newest timestamp we saw last run.
+            # Stop at content we've already emitted (feeds are newest-first). The
+            # exact resume point is the last-seen id. For the timestamp guard use
+            # strict ``<``: an entry *equal* to seen_ts may be a NEW item a feed
+            # added later under the same (often day-granularity) timestamp — using
+            # ``<=`` dropped it forever. The sink dedups by natural key, so any
+            # same-ts item we already emitted is harmlessly re-upserted, not lost.
             if seen_id is not None and natural_key == seen_id:
                 break
-            if seen_ts is not None and published <= seen_ts:
+            if seen_ts is not None and published < seen_ts:
                 break
 
             # Track the newest (first) entry for the next run's checkpoint.

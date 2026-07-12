@@ -20,6 +20,25 @@ async def test_rate_limiter_throttles() -> None:
     assert elapsed >= 0.15  # forced to wait for a token to refill
 
 
+async def test_rate_limiter_sustained_rate_is_not_doubled() -> None:
+    """Sustained demand must honour the configured rate, not ~2x it.
+
+    Regression: after sleeping to earn a token the limiter left ``_last`` at the
+    pre-sleep instant, so the next acquire re-credited the slept interval —
+    doubling throughput. With rate=10/sec, 20 back-to-back acquires must earn 10
+    tokens beyond the initial full bucket, i.e. take >= ~1.0s. The old double-
+    credit code finished in roughly half that.
+    """
+    limiter = RateLimiter(rate=10, per=1.0)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
+    for _ in range(20):
+        await limiter.acquire()
+    elapsed = loop.time() - start
+    # 10 tokens must be earned at 10/sec => >= ~1.0s; allow slack for scheduling.
+    assert elapsed >= 0.85, f"sustained rate too fast ({elapsed:.2f}s) — double-credit?"
+
+
 @respx.mock
 async def test_get_json_success() -> None:
     respx.get("https://api.example/x").mock(return_value=httpx.Response(200, json={"ok": True}))

@@ -294,11 +294,17 @@ class FreshnessComponent:
         latest_news: datetime | None,
     ) -> ComponentScore:
         """Pure decay of the most recent freshness instant against ``now``."""
-        candidates = [d for d in (release_date, latest_news) if d is not None]
+        # Freshness measures recency of a PAST event. A future release date (an
+        # unreleased game) is not "fresh" — it would give a negative age that
+        # exp_decay reads as max freshness with a false "just released" reason, so
+        # a game that can't be streamed yet outranks one that actually just shipped.
+        # Drop future-dated candidates before choosing the reference.
+        candidates = [d for d in (release_date, latest_news) if d is not None and d <= now]
         if not candidates:
+            unreleased = release_date is not None and release_date > now
             return ComponentScore(
                 value=0.0,
-                reason="no release or news date",
+                reason="unreleased — not out yet" if unreleased else "no release or news date",
                 detail={"age_days": None, "source": None},
             )
 

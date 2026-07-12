@@ -211,11 +211,14 @@ class SwitchSource:
             iso_date = _parse_release_date(release_date)
             entry_date = _parse_iso(iso_date)
 
-            # Skip content we've already emitted: an id match, or (when both are
-            # dated) an entry at/older than the newest release date seen last run.
+            # Skip content we've already emitted. Match the exact resume id, and
+            # use strict ``<`` on the date: a same-date entry that is NOT the resume
+            # id may be a NEW release the eShop feed added later that day — ``<=``
+            # dropped it forever. The sink dedups by natural key, so re-seeing an
+            # already-emitted same-date entry is a harmless upsert, not a duplicate.
             if seen_id is not None and natural_key == seen_id:
                 continue
-            if seen_date is not None and entry_date is not None and entry_date <= seen_date:
+            if seen_date is not None and entry_date is not None and entry_date < seen_date:
                 continue
 
             # Track the newest entry for the next run's checkpoint. "Newest" is by
