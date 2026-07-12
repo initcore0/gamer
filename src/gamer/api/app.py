@@ -22,10 +22,11 @@ from typing import Any
 
 import uvicorn
 from fastapi import FastAPI, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from gamer.api.queries.status import StatusPayload, build_status
-from gamer.api.routes import dashboard, game_detail, games, news, recs, sources
+from gamer.api.routes import dashboard, game_detail, games, news, recs, sources, users
 from gamer.api.templating import STATIC_DIR
 from gamer.config import Settings, get_settings
 from gamer.logging import get_logger
@@ -46,6 +47,16 @@ def build_api(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(title="gamer", version="0.2.0", docs_url=None, redoc_url=None)
 
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # CORS: only added when origins are configured (GAMER_UI__CORS_ORIGINS). An
+    # empty list keeps the app same-origin — no middleware, prod byte-identical.
+    if settings.ui.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.ui.cors_origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     @app.middleware("http")
     async def _csp_header(request: Request, call_next: Any) -> Response:
@@ -72,6 +83,7 @@ def build_api(settings: Settings | None = None) -> FastAPI:
     app.include_router(recs.router)
     app.include_router(news.router)
     app.include_router(sources.router)
+    app.include_router(users.router)
     return app
 
 
