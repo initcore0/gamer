@@ -39,3 +39,13 @@ async def dashboard(request: Request) -> HTMLResponse:
 @router.get("/api/v1/status")
 async def status_json() -> status_q.StatusPayload:
     return await status_q.build_status()
+
+
+@router.get(
+    "/api/v1/dashboard",
+    tags=["ops"],
+    summary="Dashboard payload (top movers, latest recs, digest state)",
+)
+async def dashboard_json() -> status_q.DashboardPayload:
+    """Everything the dashboard renders beyond ``/status`` (API_CONTRACT.md)."""
+    return await status_q.build_dashboard()

@@ -8,7 +8,7 @@ no auth — safe for the public build log.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, TypedDict
 
 from sqlalchemy import func, select
@@ -187,4 +187,163 @@ async def build_status(*, now: datetime | None = None) -> StatusPayload:
         stale_sources=stale,
         counts=row_counts,
         recent_recommendations=recent,
+    )
+
+
+class DashboardTopMover(TypedDict):
+    game_id: int
+    name: str
+    latest: float | None
+    delta: float
+    pct: float | None
+
+
+class DashboardRecommendation(TypedDict):
+    id: int
+    game_id: int
+    game_name: str
+    score: float
+    user_key: str
+    created_at: str | None
+
+
+class DashboardPayload(TypedDict):
+    top_movers: list[DashboardTopMover]
+    latest_recommendations: list[DashboardRecommendation]
+    last_digest: LastDigest | None
+    next_digest_at: str | None
+
+
+async def dashboard_top_movers() -> list[DashboardTopMover]:
+    """Top 24h player gainers in the contract's JSON shape (API_CONTRACT.md).
+
+    Same ordering/window as :func:`top_movers` (precomputed ``game_stats`` delta,
+    never ``signals_samples`` at request time — UI_PLAN.md §5.4), but shaped for
+    the JSON dashboard: ``latest`` current players and the percentage growth
+    ``pct`` (``delta`` over the pre-delta baseline) instead of the sparkline the
+    HTML strip uses.
+    """
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(
+                    GameStats.game_id,
+                    Game.name,
+                    GameStats.current_players,
+                    GameStats.players_24h_delta,
+                )
+                .join(Game, Game.id == GameStats.game_id)
+                .where(GameStats.players_24h_delta.is_not(None))
+                .order_by(GameStats.players_24h_delta.desc())
+                .limit(_TOP_MOVERS_LIMIT)
+            )
+        ).all()
+    movers: list[DashboardTopMover] = []
+    for game_id, name, latest, delta in rows:
+        latest_f = None if latest is None else float(latest)
+        delta_f = float(delta)
+        # pct = growth over the pre-delta baseline (latest - delta); None when the
+        # baseline is unknown or zero (avoid div-by-zero and misleading numbers).
+        pct: float | None = None
+        if latest_f is not None:
+            baseline = latest_f - delta_f
+            if baseline != 0:
+                pct = round(delta_f / baseline * 100, 1)
+        movers.append(
+            DashboardTopMover(
+                game_id=int(game_id),
+                name=name,
+                latest=latest_f,
+                delta=delta_f,
+                pct=pct,
+            )
+        )
+    return movers
+
+
+async def dashboard_latest_recommendations() -> list[DashboardRecommendation]:
+    """Latest recommendations in the contract's JSON shape (API_CONTRACT.md).
+
+    Like :func:`latest_recommendations` but carries the rec ``id``, owning
+    ``user_key`` (multi-user ``pref_key``), and ``created_at`` the JSON dashboard
+    needs. Newest first.
+    """
+    async with session_scope() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Recommendation.id,
+                    Recommendation.game_id,
+                    Game.name,
+                    Recommendation.score,
+                    Recommendation.pref_key,
+                    Recommendation.created_at,
+                )
+                .join(Game, Game.id == Recommendation.game_id)
+                .order_by(Recommendation.created_at.desc(), Recommendation.id.desc())
+                .limit(_LATEST_REC_LIMIT)
+            )
+        ).all()
+    return [
+        DashboardRecommendation(
+            id=int(rec_id),
+            game_id=int(game_id),
+            game_name=name,
+            score=round(float(score), 4),
+            user_key=str(pref_key),
+            created_at=created_at.isoformat() if created_at else None,
+        )
+        for rec_id, game_id, name, score, pref_key, created_at in rows
+    ]
+
+
+def next_digest_at(
+    digest_hour_utc: int,
+    *,
+    group_chat_id: int,
+    now: datetime,
+) -> datetime | None:
+    """Next UTC instant the daily digest fires, or ``None`` if no group chat.
+
+    Pure helper (unit-tested, DB-free). The digest is a daily cron at
+    ``digest_hour_utc`` UTC; the next fire is today at that hour if it is still
+    ahead of ``now``, otherwise tomorrow. Returns ``None`` when no group chat is
+    configured (``group_chat_id == 0``), since the digest has nowhere to go.
+
+    ``now`` is coerced to UTC; a naive ``now`` is assumed to already be UTC.
+    """
+    if group_chat_id == 0:
+        return None
+    now_utc = now.astimezone(UTC) if now.tzinfo is not None else now.replace(tzinfo=UTC)
+    fire = now_utc.replace(hour=digest_hour_utc, minute=0, second=0, microsecond=0)
+    if fire <= now_utc:
+        fire += timedelta(days=1)
+    return fire
+
+
+async def build_dashboard(*, now: datetime | None = None) -> DashboardPayload:
+    """Assemble the ``/api/v1/dashboard`` payload (API_CONTRACT.md).
+
+    Everything the dashboard page renders beyond ``/status``: the top-movers
+    strip, the latest recommendations, the last digest, and the next digest fire
+    time. Reuses the same read-only helpers as the HTML dashboard. ``now`` is
+    injectable so the ``next_digest_at`` computation is deterministic in tests.
+    """
+    from gamer.config import get_settings
+
+    now = now or datetime.now(UTC)
+    settings = get_settings()
+    movers = await dashboard_top_movers()
+    latest = await dashboard_latest_recommendations()
+    digest = await last_digest()
+    next_at = next_digest_at(
+        settings.telegram.digest_hour_utc,
+        group_chat_id=settings.telegram.group_chat_id,
+        now=now,
+    )
+    return DashboardPayload(
+        top_movers=movers,
+        latest_recommendations=latest,
+        last_digest=digest,
+        next_digest_at=next_at.isoformat() if next_at is not None else None,
     )
