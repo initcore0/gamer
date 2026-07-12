@@ -114,3 +114,14 @@ async def games_json(
         ],
         "next_cursor": page.next_cursor,
     }
+
+
+@router.get(
+    "/api/v1/genres",
+    tags=["catalog"],
+    summary="Canonical genre list",
+    response_model=None,
+)
+async def genres_json() -> dict[str, list[str]]:
+    """The catalog's canonical genres, sorted — the ``genre`` filter allowlist."""
+    return {"genres": await games_q.list_genres()}

@@ -69,3 +69,14 @@ async def news_json(
         ],
         "next_cursor": page.next_cursor,
     }
+
+
+@router.get(
+    "/api/v1/news/sources",
+    tags=["news"],
+    summary="News source allowlist",
+    response_model=None,
+)
+async def news_sources_json() -> dict[str, list[str]]:
+    """The distinct news sources — the ``source`` filter allowlist."""
+    return {"sources": await news_q.news_sources()}
