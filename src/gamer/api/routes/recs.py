@@ -60,6 +60,7 @@ async def recommendations_json(
                 "game_id": row.game_id,
                 "game_name": row.game_name,
                 "score": row.score,
+                "user_key": row.user_key,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "sent_at": row.sent_at.isoformat() if row.sent_at else None,
                 "feedback": row.feedback,

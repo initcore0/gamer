@@ -43,6 +43,18 @@ async def _seed() -> tuple[int, list[int]]:
         session.add(Feedback(rec_id=rec_ids[0], verdict=FeedbackVerdict.UP))
         session.add(Feedback(rec_id=rec_ids[0], verdict=FeedbackVerdict.UP))
         session.add(Feedback(rec_id=rec_ids[0], verdict=FeedbackVerdict.DOWN))
+        # One extra rec owned by a *different* profile (multi-user) — the
+        # user_key filter must exclude it.
+        other = Recommendation(
+            game_id=gid,
+            score=0.99,
+            pref_key="99999",
+            breakdown={},
+            created_at=_NOW - timedelta(minutes=10),
+        )
+        session.add(other)
+        await session.flush()
+        rec_ids.append(other.id)
     return gid, rec_ids
 
 
@@ -53,6 +65,8 @@ async def _cleanup(gid: int) -> None:
 
 async def test_feed_pagination_and_feedback_counts() -> None:
     gid, rec_ids = await _seed()
+    # The 5 default-profile recs (newest-first) + the trailing other-profile rec.
+    default_ids, other_id = rec_ids[:5], rec_ids[5]
     try:
         seen: list[int] = []
         cursor: str | None = None
@@ -62,14 +76,26 @@ async def test_feed_pagination_and_feedback_counts() -> None:
             if page.next_cursor is None:
                 break
             cursor = page.next_cursor
-        # All five seeded recs seen exactly once, newest-first order preserved.
-        assert [r for r in seen if r in rec_ids] == rec_ids
+        # All six seeded recs seen exactly once (unfiltered feed = every profile).
+        assert set(seen) == set(rec_ids)
         assert len(set(seen)) == len(seen)
 
         first = await list_recommendations(limit=2)
-        newest = next(r for r in first.rows if r.id == rec_ids[0])
+        newest = next(r for r in first.rows if r.id == default_ids[0])
         assert newest.feedback == {"up": 2, "down": 1, "played": 0}
         assert newest.sent_at is not None
         assert newest.game_name == "Rec Game"
+        assert newest.user_key == "default"
+
+        # user_key filter (multi-user): "default" excludes the other profile's rec;
+        # "99999" returns only it.
+        default_page = await list_recommendations(limit=50, user_key="default")
+        default_seen = {r.id for r in default_page.rows if r.id in rec_ids}
+        assert default_seen == set(default_ids)
+        assert other_id not in default_seen
+
+        other_page = await list_recommendations(limit=50, user_key="99999")
+        other_seen = {r.id for r in other_page.rows if r.id in rec_ids}
+        assert other_seen == {other_id}
     finally:
         await _cleanup(gid)

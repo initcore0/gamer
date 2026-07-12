@@ -34,6 +34,11 @@ class Notification:
 
     ``dedup_key`` lets the outbox guarantee at-most-once delivery of the same
     logical message (e.g. one digest per day per channel).
+
+    ``target_chat_id`` (multi-user) overrides the transport's configured default
+    chat when set — this is how one Telegram DM transport fans a per-user digest
+    out to each subscriber's own chat. ``None`` (the default) keeps the pre-
+    multiuser behavior: the transport sends to its own configured chat id.
     """
 
     channel: Channel
@@ -42,6 +47,8 @@ class Notification:
     buttons: Sequence[Button] = field(default_factory=list)
     #: transport-specific hints (parse_mode, disable_preview…).
     meta: dict[str, Any] = field(default_factory=dict)
+    #: per-message target chat override; None => the transport's default chat.
+    target_chat_id: int | None = None
 
 
 @dataclass(slots=True)

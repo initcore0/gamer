@@ -81,10 +81,26 @@ def test_format_scored_reply_shows_top_reasons_and_penalty() -> None:
 
 
 @dataclass
+class _FakeChat:
+    """Minimal aiogram Chat stand-in: a private DM chat with a positive id."""
+
+    id: int = 12345
+    type: str = "private"
+    title: str | None = None
+
+
+@dataclass
+class _FakeUser:
+    full_name: str = "Test User"
+
+
+@dataclass
 class _FakeMessage:
     """Minimal Message stand-in that records what a handler answers."""
 
     replies: list[str] = field(default_factory=list)
+    chat: _FakeChat = field(default_factory=_FakeChat)
+    from_user: _FakeUser = field(default_factory=_FakeUser)
 
     async def answer(self, text: str, parse_mode: str | None = None) -> None:
         self.replies.append(text)
@@ -96,6 +112,8 @@ class _FakeMessageKb:
 
     replies: list[str] = field(default_factory=list)
     markups: list[object] = field(default_factory=list)
+    chat: _FakeChat = field(default_factory=_FakeChat)
+    from_user: _FakeUser = field(default_factory=_FakeUser)
 
     async def answer(
         self, text: str, parse_mode: str | None = None, reply_markup: object = None
@@ -330,10 +348,12 @@ def _patch_genre_env(
     async def _known() -> list[str]:
         return genres
 
-    async def _subs() -> set[str]:
+    async def _subs(key: str = "default") -> set[str]:
         return set(state["subscribed"])  # type: ignore[arg-type]
 
-    async def _toggle(canonical: str) -> tuple[bool, int]:
+    async def _toggle(
+        canonical: str, key: str = "default", *, label: str | None = None
+    ) -> tuple[bool, int]:
         calls = state["toggle_calls"]
         assert isinstance(calls, list)
         calls.append(canonical)
@@ -402,15 +422,26 @@ async def test_on_genre_page_nav_edits(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cb.message is not None and len(cb.message.edited) == 1
 
 
+async def _stub_get_prefs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stub _get_prefs so cmd_genres doesn't touch the DB when ensuring a profile."""
+    from gamer.db.models import StreamerPref
+
+    async def _get(key: str, *, label: str | None = None) -> StreamerPref:
+        return StreamerPref(key=key, label=label)
+
+    monkeypatch.setattr(handlers, "_get_prefs", _get)
+
+
 async def test_cmd_genres_empty_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _known() -> list[str]:
         return []
 
-    async def _subs() -> set[str]:
+    async def _subs(key: str = "default") -> set[str]:
         return set()
 
     monkeypatch.setattr(handlers, "known_genres", _known)
     monkeypatch.setattr(handlers, "_subscribed_set", _subs)
+    await _stub_get_prefs(monkeypatch)
     msg = _FakeMessageKb()
     await cmd_genres(msg)  # type: ignore[arg-type]
     assert msg.replies and "No genres" in msg.replies[0]
@@ -421,11 +452,12 @@ async def test_cmd_genres_attaches_keyboard(monkeypatch: pytest.MonkeyPatch) -> 
     async def _known() -> list[str]:
         return ["Puzzle", "RPG"]
 
-    async def _subs() -> set[str]:
+    async def _subs(key: str = "default") -> set[str]:
         return {"Puzzle"}
 
     monkeypatch.setattr(handlers, "known_genres", _known)
     monkeypatch.setattr(handlers, "_subscribed_set", _subs)
+    await _stub_get_prefs(monkeypatch)
     msg = _FakeMessageKb()
     await cmd_genres(msg)  # type: ignore[arg-type]
     assert "Tap a genre" in msg.replies[0]
@@ -462,7 +494,7 @@ async def test_genre_callback_stale_panel_still_answers(monkeypatch) -> None:  #
     async def fake_known_genres() -> list[str]:
         return ["Puzzle"]
 
-    async def fake_subscribed_set() -> set[str]:
+    async def fake_subscribed_set(key: str = "default") -> set[str]:
         return set()
 
     monkeypatch.setattr(handlers, "known_genres", fake_known_genres)
@@ -471,3 +503,75 @@ async def test_genre_callback_stale_panel_still_answers(monkeypatch) -> None:  #
     await handlers.on_genre(_FakeCallback())  # type: ignore[arg-type]
     assert answers, "callback was never answered"
     assert "stale" in (answers[-1] or "")
+
+
+# ── Multi-user: key derivation, labels, legacy adoption ───────────────────────
+
+
+def test_resolve_key_from_dm_message() -> None:
+    from gamer.bot.handlers import _resolve_key
+
+    msg = _FakeMessage(chat=_FakeChat(id=42))
+    assert _resolve_key(msg) == "42"
+
+
+def test_resolve_key_falls_back_to_legacy_when_no_chat() -> None:
+    from gamer.bot.handlers import LEGACY_KEY, _resolve_key
+
+    assert _resolve_key(object()) == LEGACY_KEY
+
+
+def test_label_for_dm_uses_full_name() -> None:
+    from gamer.bot.handlers import _label_for
+
+    msg = _FakeMessage(chat=_FakeChat(id=1, type="private"), from_user=_FakeUser("Ada Lovelace"))
+    assert _label_for(msg) == "Ada Lovelace"  # type: ignore[arg-type]
+
+
+def test_label_for_group_uses_title() -> None:
+    from gamer.bot.handlers import _label_for
+
+    msg = _FakeMessage(chat=_FakeChat(id=-100, type="supergroup", title="Streamers"))
+    assert _label_for(msg) == "Streamers"  # type: ignore[arg-type]
+
+
+def test_should_adopt_legacy_only_for_configured_operator_chats(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from gamer.config import get_settings
+
+    monkeypatch.setenv("GAMER_TELEGRAM__DM_CHAT_ID", "111")
+    monkeypatch.setenv("GAMER_TELEGRAM__GROUP_CHAT_ID", "-222")
+    get_settings.cache_clear()
+
+    from gamer.bot.handlers import _should_adopt_legacy
+
+    assert _should_adopt_legacy("111") is True  # operator's DM
+    assert _should_adopt_legacy("-222") is True  # operator's group
+    assert _should_adopt_legacy("999") is False  # some other user
+    assert _should_adopt_legacy("default") is False  # legacy never adopts itself
+
+
+def test_copy_legacy_fields_deep_copies() -> None:
+    from gamer.bot.handlers import _copy_legacy_fields
+    from gamer.db.models import StreamerPref
+
+    legacy = StreamerPref(
+        key="default",
+        liked_genres=["RPG"],
+        blocked_genres=["Horror"],
+        subscribed_genres=["Puzzle"],
+        muted_game_ids=[7, 8],
+        digest_enabled=False,
+        profile_embedding=[0.1, 0.2],
+    )
+    row = StreamerPref(key="111")
+    _copy_legacy_fields(legacy, row)
+
+    assert row.subscribed_genres == ["Puzzle"]
+    assert row.muted_game_ids == [7, 8]
+    assert row.digest_enabled is False
+    assert row.profile_embedding == [0.1, 0.2]
+    # Deep copy: mutating the copy must not touch the legacy row's lists.
+    row.subscribed_genres.append("Action")
+    assert legacy.subscribed_genres == ["Puzzle"]

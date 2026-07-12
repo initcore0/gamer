@@ -61,9 +61,11 @@ class _TelegramTransport:
         reply_markup = build_inline_keyboard(msg.buttons) if self._interactive else None
         parse_mode = msg.meta.get("parse_mode")
         disable_preview = msg.meta.get("disable_preview")
+        # Per-message target override (multi-user DM fan-out); else our own chat.
+        chat_id = msg.target_chat_id if msg.target_chat_id is not None else self._chat_id
         try:
             sent = await self._bot.send_message(
-                chat_id=self._chat_id,
+                chat_id=chat_id,
                 text=msg.text,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,

@@ -38,6 +38,9 @@ class RecRow:
     game_id: int
     game_name: str
     score: float
+    #: The preference profile that owns this rec (multi-user). ``"default"`` is
+    #: the legacy/global profile; bot users are ``str(telegram_chat_id)``.
+    user_key: str
     created_at: datetime
     sent_at: datetime | None
     feedback: dict[str, int]
@@ -87,6 +90,8 @@ def group_runs(rows: list[RecRow]) -> list[RunGroup]:
 async def list_recommendations(
     cursor: str | None = None,
     limit: int = DEFAULT_LIMIT,
+    *,
+    user_key: str | None = None,
 ) -> RecPage:
     """Keyset-paginated recommendation feed, newest first (UI_PLAN.md §3.4).
 
@@ -94,6 +99,10 @@ async def list_recommendations(
     plus ``id`` of the last row. Feedback verdict counts are aggregated in a
     single grouped subquery LEFT JOINed per rec (no N+1). Talks to the DB →
     integration-only.
+
+    ``user_key`` (multi-user) filters to one preference profile's rows via
+    ``Recommendation.pref_key``; ``None`` (the default) returns every profile's
+    rows. The ``(pref_key, created_at DESC)`` index backs the filtered seek.
     """
     limit = _clamp_limit(limit)
 
@@ -117,6 +126,7 @@ async def list_recommendations(
             Recommendation.game_id,
             Game.name,
             Recommendation.score,
+            Recommendation.pref_key,
             Recommendation.created_at,
             Recommendation.sent_at,
             Recommendation.breakdown,
@@ -126,6 +136,9 @@ async def list_recommendations(
         .join(Game, Game.id == Recommendation.game_id)
         .outerjoin(fb, fb.c.rec_id == Recommendation.id)
     )
+
+    if user_key is not None:
+        stmt = stmt.where(Recommendation.pref_key == user_key)
 
     seek = decode_cursor(cursor, (str, int))
     if seek is not None:
@@ -175,6 +188,7 @@ def _to_row(rt: Any) -> RecRow:
         game_id,
         name,
         score,
+        pref_key,
         created_at,
         sent_at,
         breakdown,
@@ -186,6 +200,7 @@ def _to_row(rt: Any) -> RecRow:
         game_id=int(game_id),
         game_name=str(name),
         score=float(score),
+        user_key=str(pref_key),
         created_at=created_at,
         sent_at=sent_at,
         feedback=feedback,

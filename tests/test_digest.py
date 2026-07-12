@@ -3,7 +3,14 @@ from __future__ import annotations
 from datetime import date
 
 from gamer.notify.base import Channel
-from gamer.notify.digest import apply_genre_quota, build_digest, build_scored_digest
+from gamer.notify.digest import (
+    apply_genre_quota,
+    build_digest,
+    build_dm_digest,
+    build_scored_digest,
+    dm_digest_dedup_key,
+    select_dm_digest_keys,
+)
 from gamer.scoring.base import ScoredRecommendation
 from gamer.signals.movers import Mover
 
@@ -162,3 +169,50 @@ def test_mover_math() -> None:
     assert m.pct == 50.0
     zero = Mover(game_id=2, name="Y", platform_app_id=2, latest=10, baseline=0)
     assert zero.pct is None  # guards divide-by-zero baseline
+
+
+# ── Multi-user digest fan-out (pure) ──────────────────────────────────────────
+
+
+def test_select_dm_digest_keys_picks_positive_enabled_non_group() -> None:
+    # key, digest_enabled tuples across the mix of profile kinds.
+    rows = [
+        ("default", True),  # legacy/non-numeric → skip
+        ("111", True),  # DM, enabled → keep
+        ("222", False),  # DM, disabled → skip
+        ("-1001", True),  # group/supergroup (negative) → skip
+        ("333", True),  # DM, enabled → keep
+    ]
+    assert select_dm_digest_keys(rows, group_chat_id=-1001) == [111, 333]
+
+
+def test_select_dm_digest_keys_excludes_group_chat_id() -> None:
+    # A group configured with a *positive* id must still be excluded from the DM
+    # fan-out (the group digest already covers it).
+    rows = [("500", True), ("999", True)]
+    assert select_dm_digest_keys(rows, group_chat_id=500) == [999]
+
+
+def test_select_dm_digest_keys_dedups_preserving_order() -> None:
+    rows = [("42", True), ("7", True), ("42", True)]
+    assert select_dm_digest_keys(rows, group_chat_id=-1) == [42, 7]
+
+
+def test_select_dm_digest_keys_empty() -> None:
+    assert select_dm_digest_keys([], group_chat_id=-1) == []
+
+
+def test_dm_digest_dedup_key_shape_includes_chat() -> None:
+    day = date(2026, 7, 12)
+    assert dm_digest_dedup_key(555, day) == "digest:2026-07-12:dm:555"
+    # Two different users on the same day get distinct dedup keys (independent).
+    assert dm_digest_dedup_key(555, day) != dm_digest_dedup_key(666, day)
+
+
+def test_build_dm_digest_targets_chat_and_uses_dm_channel() -> None:
+    recs = [ScoredRecommendation(game_id=1, name="Hades", score=0.9, genres=["RPG"])]
+    n = build_dm_digest(recs, chat_id=777, for_day=date(2026, 7, 12))
+    assert n.channel is Channel.TELEGRAM_DM
+    assert n.target_chat_id == 777
+    assert n.dedup_key == "digest:2026-07-12:dm:777"
+    assert "Hades" in n.text
