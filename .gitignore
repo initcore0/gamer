@@ -29,6 +29,12 @@ data/
 models/
 *.sqlite3
 
+# Web UI (Vite + React) build + deps
+web/node_modules/
+web/dist/
+web/coverage/
+web/*.tsbuildinfo
+
 # Editors / OS
 .idea/
 .vscode/

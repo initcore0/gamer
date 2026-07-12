@@ -1,9 +1,9 @@
-"""Catalog route + static-asset tests (UI_PLAN.md §8 UI-M1).
+"""Catalog JSON route tests (API_CONTRACT.md §Catalog).
 
 The list query is monkeypatched to a fixture so routes run through FastAPI
-without Postgres. Covers: full page vs HX-Request fragment, JSON twin shape,
-the search-input seed, and StaticFiles serving (app.css served, missing 404s).
-Live-DB pagination/search is exercised in ``test_api_games_integration.py``.
+without Postgres. Covers: JSON twin shape, empty-string filter params, 422 for
+bad enum values, the ``/api/v1/genres`` allowlist, and the datetime-cursor
+degrade path. Live-DB pagination/search is in ``test_api_games_integration.py``.
 """
 
 from __future__ import annotations
@@ -52,39 +52,6 @@ def _patch_games(monkeypatch: pytest.MonkeyPatch, page: GamePage = _FIXTURE) -> 
     monkeypatch.setattr(games_route.games_q, "list_genres", _fake_list_genres)
 
 
-def test_games_full_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_games(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/games")
-    assert resp.status_code == 200
-    html = resp.text
-    assert "<html" in html  # full document, not a fragment
-    assert 'name="q"' in html  # search input seed
-    assert "Celeste" in html
-    assert "Hades" in html
-    assert "Load more" in html  # next_cursor present → load-more control shown
-
-
-def test_games_hx_request_returns_fragment(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_games(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/games", headers={"HX-Request": "true"})
-    assert resp.status_code == 200
-    html = resp.text
-    assert "<html" not in html  # fragment only
-    assert 'name="q"' not in html  # no search input in the fragment
-    assert "Celeste" in html
-    assert "Load more" in html
-
-
-def test_games_empty_no_load_more(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_games(monkeypatch, GamePage(rows=[], next_cursor=None))
-    client = TestClient(build_api())
-    resp = client.get("/games", headers={"HX-Request": "true"})
-    assert "No games found." in resp.text
-    assert "Load more" not in resp.text
-
-
 def test_games_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_games(monkeypatch)
     client = TestClient(build_api())
@@ -107,18 +74,10 @@ def test_games_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_games_search_with_empty_filter_params(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The filter form submits unselected fields as empty strings — the exact
-    query string the search box sends must not 422 (regression: every UI search
-    failed because ``platform=`` broke enum coercion)."""
-    _patch_games(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/games?q=dota&platform=&genre=&sort=name")
-    assert resp.status_code == 200
-    assert "Celeste" in resp.text
-
-
 def test_games_json_empty_filter_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The UI submits unselected fields as empty strings — the exact query string
+    must not 422 (regression: every UI search failed because ``platform=`` broke
+    enum coercion)."""
     _patch_games(monkeypatch)
     client = TestClient(build_api())
     resp = client.get("/api/v1/games?q=dota&platform=&genre=&sort=&tracked=&active=")
@@ -138,18 +97,12 @@ def test_games_json_invalid_platform_is_422() -> None:
     assert resp.status_code == 422
 
 
-def test_static_app_css_served() -> None:
+def test_genres_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    _patch_games(monkeypatch)
     client = TestClient(build_api())
-    resp = client.get("/static/app.css")
+    resp = client.get("/api/v1/genres")
     assert resp.status_code == 200
-    assert "text/css" in resp.headers["content-type"]
-    assert "--accent" in resp.text  # our hand-rolled variables
-
-
-def test_static_missing_file_404() -> None:
-    client = TestClient(build_api())
-    resp = client.get("/static/nope.js")
-    assert resp.status_code == 404
+    assert resp.json() == {"genres": ["Action", "Platformer", "Roguelike"]}
 
 
 def test_tampered_datetime_cursor_never_raises() -> None:

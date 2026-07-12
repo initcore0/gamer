@@ -1,37 +1,19 @@
-"""Sources ops-view routes (UI_PLAN.md §3.6 / §8 UI-M4).
+"""Sources ops-view JSON route (API_CONTRACT.md §Ops).
 
-* ``GET /sources``        → per-source cards (jobs table) + the 14-day event bar
-  chart. Always a full page — no HTMX fragments here.
-* ``GET /api/v1/sources`` → JSON twin.
-
-All SQL lives in ``queries.sources``; job error strings are already redacted at
-write time and truncated there (§7). No SQL here.
+``GET /api/v1/sources`` → per-source freshness + job history + the events-per-day
+series the SPA renders. All SQL lives in ``queries.sources``; job error strings
+are already redacted at write time and truncated there (§7). No SQL here.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter
 
 from gamer.api.queries import sources as sources_q
-from gamer.api.templating import templates
 
 router = APIRouter()
-
-
-@router.get("/sources", response_class=HTMLResponse)
-async def sources_page(request: Request) -> HTMLResponse:
-    cards = await sources_q.source_overview()
-    events = await sources_q.events_per_day()
-    context = {
-        "cards": cards,
-        "events": events,
-        # Float-only series for the |bars svg helper (samples dominate the scale).
-        "event_bars": [float(d.samples) for d in events],
-    }
-    return templates.TemplateResponse(request, "sources.html", context)
 
 
 @router.get("/api/v1/sources")

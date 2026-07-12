@@ -107,24 +107,6 @@ def test_status_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
 
-def test_dashboard_renders_ported_sections(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_status(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/")
-    assert resp.status_code == 200
-    assert "text/html" in resp.headers["content-type"]
-    html = resp.text
-    assert "gamer" in html
-    assert "Counts" in html
-    assert "Sources" in html
-    assert "Recent recommendations" in html
-    assert "Hades" in html
-    assert "STALE" in html  # the stale rss source is badged
-    # No external asset URLs — everything self-hosted under /static (§2, §9).
-    assert "unpkg.com" not in html
-    assert "/static/app.css" in html
-
-
 @pytest.mark.integration
 async def test_status_against_db() -> None:
     """DB-backed /status smoke test. Requires a live database via GAMER_DB__*."""

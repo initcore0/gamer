@@ -1,8 +1,8 @@
-"""Game-detail route + pure-helper tests (UI_PLAN.md §3.3, UI-M3).
+"""Game-detail JSON route + pure-helper tests (API_CONTRACT.md §Catalog).
 
 Queries are monkeypatched so routes run through FastAPI without Postgres. Covers:
-the detail page render, the 404 page, the JSON twin, the series endpoint
-(cache header + 422 on bad params), CSP header on HTML, and the pure breakdown /
+the JSON twin (detail + breakdown + news + similar + steam_url), the 404, the
+series endpoint (cache header + 422 on bad params), and the pure breakdown /
 news-grouping helpers. Live-DB queries are in ``test_api_game_detail_integration``.
 """
 
@@ -24,7 +24,7 @@ from gamer.api.queries.game_detail import (
     group_news_by_cluster,
 )
 from gamer.api.queries.signals import Series
-from gamer.api.routes.game_detail import _breakdown_bars, _breakdown_penalties, _steam_store_url
+from gamer.api.routes.game_detail import _steam_store_url
 
 _NOW = datetime(2026, 7, 9, tzinfo=UTC)
 
@@ -90,42 +90,6 @@ def _patch(monkeypatch: pytest.MonkeyPatch, *, detail: GameDetail | None = _DETA
     monkeypatch.setattr(detail_route.signals_q, "series", _series)
 
 
-def test_detail_page_renders(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/games/42")
-    assert resp.status_code == 200
-    html = resp.text
-    assert "Celeste" in html
-    assert "store.steampowered.com/app/504230" in html
-    assert 'rel="noopener"' in html
-    assert "momentum" in html  # score bar
-    assert "recently streamed" in html  # penalty reason
-    assert "Big update" in html  # news
-    assert "+1 similar" in html
-    assert "Hades" in html  # similar game chip
-    # Charts wired via static file, not inline script.
-    assert "/static/charts.js" in html
-    assert "<script>" not in html
-
-
-def test_detail_page_has_csp_header(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch)
-    client = TestClient(build_api())
-    resp = client.get("/games/42")
-    csp = resp.headers["content-security-policy"]
-    assert "default-src 'self'" in csp
-    assert "script-src 'self'" in csp
-
-
-def test_detail_404_page(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch(monkeypatch, detail=None)
-    client = TestClient(build_api())
-    resp = client.get("/games/999")
-    assert resp.status_code == 404
-    assert "Game not found" in resp.text
-
-
 def test_detail_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch(monkeypatch)
     client = TestClient(build_api())
@@ -135,8 +99,10 @@ def test_detail_json_twin(monkeypatch: pytest.MonkeyPatch) -> None:
     assert body["id"] == 42
     assert body["name"] == "Celeste"
     assert body["breakdown"]["score"] == 0.83
-    # JSON responses must NOT carry the HTML CSP.
-    assert "content-security-policy" not in {k.lower() for k in resp.headers}
+    assert body["steam_url"] == "https://store.steampowered.com/app/504230"
+    # News + similar are embedded in the one detail call (contract §Catalog).
+    assert body["news"][0]["title"] == "Big update"
+    assert body["similar"][0]["name"] == "Hades"
 
 
 def test_detail_json_404(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -192,27 +158,6 @@ def test_steam_store_url_only_for_steam() -> None:
         tracked=False,
     )
     assert _steam_store_url(xbox) is None
-
-
-def test_breakdown_bars_scale_to_max_abs() -> None:
-    bars = _breakdown_bars(_BREAKDOWN)
-    assert [b["key"] for b in bars] == ["momentum", "hype"]  # penalty excluded
-    momentum = next(b for b in bars if b["key"] == "momentum")
-    assert momentum["width_pct"] == 100.0  # largest abs weighted
-    assert momentum["positive"] is True
-    hype = next(b for b in bars if b["key"] == "hype")
-    assert hype["positive"] is False
-    assert hype["width_pct"] == pytest.approx(0.05 / 0.36 * 100.0)
-
-
-def test_breakdown_penalties() -> None:
-    pens = _breakdown_penalties(_BREAKDOWN)
-    assert pens == [{"key": "cooldown", "multiplier": 0.5, "reason": "recently streamed"}]
-
-
-def test_breakdown_helpers_none() -> None:
-    assert _breakdown_bars(None) == []
-    assert _breakdown_penalties(None) == []
 
 
 def test_group_news_by_cluster() -> None:

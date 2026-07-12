@@ -139,10 +139,17 @@ class UISettings(BaseModel):
     only, so no CORS middleware is wired and prod behaves exactly as before. The
     Vite dev server proxies ``/api`` on its own origin, so this only matters when
     the React build is served from a different origin than the API.
+
+    ``spa_dist`` is the directory holding the built React app (``index.html`` +
+    hashed ``assets/``). Relative values resolve against the working directory
+    (repo root in dev, ``/app`` in the Docker image where the build copies
+    ``web/dist`` and sets ``GAMER_UI__SPA_DIST``). When the directory is missing
+    the app still boots and serves the API — there is just no UI to serve.
     """
 
     public_base_url: str = ""
     cors_origins: list[str] = Field(default_factory=list)
+    spa_dist: str = "web/dist"
 
     @field_validator("cors_origins", mode="before")
     @classmethod

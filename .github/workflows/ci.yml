@@ -60,3 +60,28 @@ jobs:
 
       - name: pytest (unit — no live APIs)
         run: uv run pytest -m "not integration"
+
+  web:
+    name: web (build · type · test)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc + vite)
+        run: npm run build
+
+      - name: Vitest (unit + MSW)
+        run: npx vitest run

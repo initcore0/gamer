@@ -1,53 +1,27 @@
-"""Game-detail routes (UI_PLAN.md §3.3 / §8 UI-M3).
+"""Game-detail JSON routes (API_CONTRACT.md §Catalog).
 
-* ``GET /games/{id}``                 → the detail page (404 → styled 404 page).
-* ``GET /api/v1/games/{id}``          → JSON twin (detail + latest breakdown).
+* ``GET /api/v1/games/{id}``          → detail + latest breakdown + news + similar.
 * ``GET /api/v1/games/{id}/series``   → compact chart data (rollup-aware).
 
 All SQL lives in ``queries.game_detail`` / ``queries.signals``; params are typed
-so bad ``metric``/``range`` values 422 (never reach SQL). Charts are driven by
-the static ``/static/charts.js`` reading data-* attributes — no inline scripts
-(CSP: ``script-src 'self'``).
+so bad ``metric``/``range`` values 422 (never reach SQL).
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import JSONResponse
 
 from gamer.api.deps import EmptyStrToNone
 from gamer.api.queries import game_detail as detail_q
 from gamer.api.queries import signals as signals_q
 from gamer.api.queries.signals import SeriesMetric, SeriesRange
-from gamer.api.templating import templates
 
 router = APIRouter()
 
 _SERIES_CACHE = "public, max-age=300"
-
-
-@router.get("/games/{game_id}", response_class=HTMLResponse)
-async def game_detail_page(request: Request, game_id: int) -> HTMLResponse:
-    detail = await detail_q.game_detail(game_id)
-    if detail is None:
-        return templates.TemplateResponse(
-            request, "game_404.html", {"game_id": game_id}, status_code=404
-        )
-    breakdown = await detail_q.latest_breakdown(game_id)
-    news = await detail_q.game_news(game_id)
-    similar = await detail_q.similar_games(game_id)
-    context = {
-        "game": detail,
-        "breakdown": breakdown,
-        "bars": _breakdown_bars(breakdown),
-        "penalties": _breakdown_penalties(breakdown),
-        "news": news,
-        "similar": similar,
-        "store_url": _steam_store_url(detail),
-    }
-    return templates.TemplateResponse(request, "game_detail.html", context)
 
 
 @router.get("/api/v1/games/{game_id}")
@@ -56,6 +30,8 @@ async def game_detail_json(game_id: int) -> dict[str, Any]:
     if detail is None:
         raise HTTPException(status_code=404, detail="game not found")
     breakdown = await detail_q.latest_breakdown(game_id)
+    news = await detail_q.game_news(game_id)
+    similar = await detail_q.similar_games(game_id)
     return {
         "id": detail.id,
         "name": detail.name,
@@ -71,6 +47,7 @@ async def game_detail_json(game_id: int) -> dict[str, Any]:
         "review_count": detail.review_count,
         "twitch_viewers": detail.twitch_viewers,
         "last_signal_at": detail.last_signal_at.isoformat() if detail.last_signal_at else None,
+        "steam_url": _steam_store_url(detail),
         "breakdown": None
         if breakdown is None
         else {
@@ -78,6 +55,25 @@ async def game_detail_json(game_id: int) -> dict[str, Any]:
             "breakdown": breakdown.breakdown,
             "created_at": breakdown.created_at.isoformat() if breakdown.created_at else None,
         },
+        "news": [
+            {
+                "id": card.id,
+                "title": card.title,
+                "url": card.url,
+                "source": card.source,
+                "published_at": card.published_at.isoformat() if card.published_at else None,
+            }
+            for card in news
+        ],
+        "similar": [
+            {
+                "id": sim.id,
+                "name": sim.name,
+                "genres": list(getattr(sim, "genres", []) or []),
+                "current_players": getattr(sim, "current_players", None),
+            }
+            for sim in similar
+        ],
     }
 
 
@@ -97,62 +93,8 @@ async def game_series_json(
     )
 
 
-# ── Server-side breakdown rendering helpers (UI_PLAN.md §3.3 score panel) ────
-
-
 def _steam_store_url(detail: detail_q.GameDetail) -> str | None:
-    """Steam store link for a steam-platform game (rel=noopener at the template)."""
+    """Steam store link for a steam-platform game (the SPA renders it as a button)."""
     if detail.platform == "steam":
         return f"https://store.steampowered.com/app/{detail.platform_app_id}"
     return None
-
-
-def _breakdown_bars(breakdown: detail_q.Breakdown | None) -> list[dict[str, Any]]:
-    """Component bars: key, weighted value, reason, bar width % (max abs = 100%).
-
-    Penalty entries (``penalty:*`` → ``{multiplier, reason}``) are excluded here —
-    they are rendered separately by :func:`_breakdown_penalties`.
-    """
-    if breakdown is None:
-        return []
-    parts = [
-        (key, part)
-        for key, part in breakdown.breakdown.items()
-        if isinstance(part, dict)
-        and not key.startswith("penalty:")
-        and part.get("weighted") is not None
-    ]
-    if not parts:
-        return []
-    max_abs = max(abs(float(part["weighted"])) for _key, part in parts) or 1.0
-    bars: list[dict[str, Any]] = []
-    for key, part in parts:
-        weighted = float(part["weighted"])
-        bars.append(
-            {
-                "key": key,
-                "weighted": weighted,
-                "reason": str(part.get("reason", "")),
-                "width_pct": abs(weighted) / max_abs * 100.0,
-                "positive": weighted >= 0.0,
-            }
-        )
-    return bars
-
-
-def _breakdown_penalties(breakdown: detail_q.Breakdown | None) -> list[dict[str, Any]]:
-    """Penalty rows: key, multiplier, reason (``penalty:*`` breakdown entries)."""
-    if breakdown is None:
-        return []
-    rows: list[dict[str, Any]] = []
-    for key, part in breakdown.breakdown.items():
-        if not key.startswith("penalty:") or not isinstance(part, dict):
-            continue
-        rows.append(
-            {
-                "key": key.removeprefix("penalty:"),
-                "multiplier": part.get("multiplier"),
-                "reason": str(part.get("reason", "")),
-            }
-        )
-    return rows
